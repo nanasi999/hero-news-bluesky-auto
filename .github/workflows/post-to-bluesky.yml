@@ -38,7 +38,8 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git pull --rebase
           git add .bluesky-posted.json
-          git diff --cached --quiet || git commit -m "Update Bluesky auto-post state"
+          git diff --cached --quiet && exit 0
+          git commit -m "Update Bluesky auto-post state"
+          git pull --rebase
           git push
