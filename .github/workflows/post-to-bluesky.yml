@@ -1,6 +1,9 @@
 name: Post blog articles to Bluesky
 
 on:
+  push:
+    branches:
+      - main
   schedule:
     - cron: "2,7,12,17,22,27,32,37,42,47,52,57 * * * *"
   workflow_dispatch:
@@ -35,6 +38,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git pull --rebase
           git add .bluesky-posted.json
           git diff --cached --quiet || git commit -m "Update Bluesky auto-post state"
           git push
