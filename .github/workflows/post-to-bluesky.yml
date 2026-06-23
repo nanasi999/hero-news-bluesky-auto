@@ -4,8 +4,6 @@ on:
   repository_dispatch:
     types:
       - bluesky-auto-post
-  schedule:
-    - cron: "1,6,11,16,21,26,31,36,41,46,51,56 * * * *"
   workflow_dispatch:
 
 concurrency:
