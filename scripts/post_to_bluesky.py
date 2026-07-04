@@ -69,13 +69,15 @@ def main():
 
     state = load_state()
     if state is None:
-        save_state(
-            {
-                "posted": sorted(current_ids),
-                "initialized_at": datetime.now(timezone.utc).isoformat(),
-            }
-        )
-        print(f"Initialized state with {len(current_ids)} existing entries. No posts sent.")
+        state = {
+            "posted": sorted(current_ids),
+            "initialized_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if DRY_RUN:
+            print(f"[DRY_RUN] Would initialize state with {len(current_ids)} existing entries. No posts sent.")
+        else:
+            save_state(state)
+            print(f"Initialized state with {len(current_ids)} existing entries. No posts sent.")
         return 0
 
     posted = set(state.get("posted", []))
@@ -96,17 +98,19 @@ def main():
     for entry in targets:
         title = entry.get("title", "New article").strip()
         link = entry["link"]
+        entry_id = get_entry_id(entry)
 
         if DRY_RUN:
             print(f"[DRY_RUN] Would post: {title} {link}")
-        else:
-            result = client.send_post(build_post(title, link))
-            print(f"Posted: {title} -> {result.uri}")
+            continue
 
-        posted.add(get_entry_id(entry))
+        result = client.send_post(build_post(title, link))
+        print(f"Posted: {title} -> {result.uri}")
 
-    state["posted"] = sorted(posted)
-    save_state(state)
+        posted.add(entry_id)
+        state["posted"] = sorted(posted)
+        save_state(state)
+
     return 0
 
 
