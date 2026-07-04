@@ -1,0 +1,45 @@
+name: Verify auto-post scripts
+
+on:
+  push:
+    paths:
+      - ".github/workflows/**"
+      - "scripts/**"
+      - ".bluesky-posted.json"
+      - ".threads-posted.json"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install atproto feedparser requests
+
+      - name: Check Python syntax
+        run: python -m py_compile scripts/post_to_bluesky.py scripts/post_to_threads.py
+
+      - name: Dry-run Bluesky script
+        run: python scripts/post_to_bluesky.py
+        env:
+          BLOG_RSS_URL: "https://hero-news.com/feed"
+          DRY_RUN: "true"
+          MAX_POSTS: "1"
+
+      - name: Dry-run Threads script
+        run: python scripts/post_to_threads.py
+        env:
+          BLOG_RSS_URL: "https://hero-news.com/feed"
+          DRY_RUN: "true"
+          MAX_POSTS: "1"
