@@ -19,6 +19,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Sync latest posted state
+        run: git pull --ff-only origin main
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -43,5 +48,13 @@ jobs:
           git add .bluesky-posted.json
           git diff --cached --quiet && exit 0
           git commit -m "Update Bluesky auto-post state"
-          git pull --rebase
-          git push
+
+          for attempt in 1 2 3 4 5; do
+            if git pull --rebase origin main && git push; then
+              exit 0
+            fi
+            git rebase --abort || true
+            sleep $((attempt * 5))
+          done
+
+          exit 1
