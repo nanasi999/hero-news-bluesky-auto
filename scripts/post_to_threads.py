@@ -68,7 +68,7 @@ def should_retry_publish(response):
     except ValueError:
         return False
 
-    message = str(error.get("message", ""))
+    message = str(error.get("message", "")).lower()
     user_title = str(error.get("error_user_title", ""))
     return (
         response.status_code == 400
@@ -139,13 +139,15 @@ def main():
 
     state = load_state()
     if state is None:
-        save_state(
-            {
-                "posted": sorted(current_ids),
-                "initialized_at": datetime.now(timezone.utc).isoformat(),
-            }
-        )
-        print(f"Initialized state with {len(current_ids)} existing entries. No posts sent.")
+        state = {
+            "posted": sorted(current_ids),
+            "initialized_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if DRY_RUN:
+            print(f"[DRY_RUN] Would initialize state with {len(current_ids)} existing entries. No posts sent.")
+        else:
+            save_state(state)
+            print(f"Initialized state with {len(current_ids)} existing entries. No posts sent.")
         return 0
 
     posted = set(state.get("posted", []))
@@ -167,17 +169,19 @@ def main():
         title = entry.get("title", "New article").strip()
         link = entry["link"]
         text = build_post(title, link)
+        entry_id = get_entry_id(entry)
 
         if DRY_RUN:
             print(f"[DRY_RUN] Would post: {text}")
-        else:
-            result = post_to_threads(user_id, access_token, text)
-            print(f"Posted: {title} -> {result}")
+            continue
 
-        posted.add(get_entry_id(entry))
+        result = post_to_threads(user_id, access_token, text)
+        print(f"Posted: {title} -> {result}")
 
-    state["posted"] = sorted(posted)
-    save_state(state)
+        posted.add(entry_id)
+        state["posted"] = sorted(posted)
+        save_state(state)
+
     return 0
 
 
