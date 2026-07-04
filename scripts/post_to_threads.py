@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -14,6 +15,8 @@ MAX_POSTS = int(os.environ.get("MAX_POSTS", "5"))
 DRY_RUN = os.environ.get("DRY_RUN", "").lower() in {"1", "true", "yes"}
 THREADS_GRAPH_BASE = os.environ.get("THREADS_GRAPH_BASE", "https://graph.threads.net/v1.0")
 POST_LIMIT = int(os.environ.get("THREADS_POST_LIMIT", "500"))
+PUBLISH_ATTEMPTS = int(os.environ.get("THREADS_PUBLISH_ATTEMPTS", "6"))
+PUBLISH_RETRY_SECONDS = int(os.environ.get("THREADS_PUBLISH_RETRY_SECONDS", "10"))
 
 
 def load_state():
@@ -56,6 +59,25 @@ def build_post(title, link):
     return f"{title[: title_limit - 3].rstrip()}...\n{link}"
 
 
+def should_retry_publish(response):
+    if response.status_code in {429, 500, 502, 503, 504}:
+        return True
+
+    try:
+        error = response.json().get("error", {})
+    except ValueError:
+        return False
+
+    message = str(error.get("message", ""))
+    user_title = str(error.get("error_user_title", ""))
+    return (
+        response.status_code == 400
+        and error.get("code") == 24
+        and error.get("error_subcode") == 4279009
+        and ("resource does not exist" in message or user_title == "Media Not Found")
+    )
+
+
 def post_to_threads(user_id, access_token, text):
     create_url = f"{THREADS_GRAPH_BASE}/{user_id}/threads"
     publish_url = f"{THREADS_GRAPH_BASE}/{user_id}/threads_publish"
@@ -76,18 +98,30 @@ def post_to_threads(user_id, access_token, text):
     if not creation_id:
         raise RuntimeError(f"Create Threads post response did not include id: {create_response.text}")
 
-    publish_response = requests.post(
-        publish_url,
-        data={
-            "creation_id": creation_id,
-            "access_token": access_token,
-        },
-        timeout=30,
-    )
-    if not publish_response.ok:
-        raise RuntimeError(f"Publish Threads post failed: {publish_response.status_code} {publish_response.text}")
+    last_response = None
+    for attempt in range(1, PUBLISH_ATTEMPTS + 1):
+        publish_response = requests.post(
+            publish_url,
+            data={
+                "creation_id": creation_id,
+                "access_token": access_token,
+            },
+            timeout=30,
+        )
+        if publish_response.ok:
+            return publish_response.json()
 
-    return publish_response.json()
+        last_response = publish_response
+        if attempt == PUBLISH_ATTEMPTS or not should_retry_publish(publish_response):
+            break
+
+        print(
+            f"Publish not ready yet for creation_id {creation_id}. "
+            f"Retrying in {PUBLISH_RETRY_SECONDS}s ({attempt}/{PUBLISH_ATTEMPTS})."
+        )
+        time.sleep(PUBLISH_RETRY_SECONDS)
+
+    raise RuntimeError(f"Publish Threads post failed: {last_response.status_code} {last_response.text}")
 
 
 def main():
