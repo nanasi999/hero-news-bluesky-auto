@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -13,6 +14,8 @@ STATE_PATH = Path(os.environ.get("STATE_PATH", ".bluesky-posted.json"))
 MAX_POSTS = int(os.environ.get("MAX_POSTS", "5"))
 DRY_RUN = os.environ.get("DRY_RUN", "").lower() in {"1", "true", "yes"}
 POST_PREFIX = os.environ.get("POST_PREFIX", "新着記事: ")
+BLUESKY_LOGIN_ATTEMPTS = int(os.environ.get("BLUESKY_LOGIN_ATTEMPTS", "5"))
+BLUESKY_LOGIN_RETRY_SECONDS = int(os.environ.get("BLUESKY_LOGIN_RETRY_SECONDS", "10"))
 
 
 def load_state():
@@ -54,6 +57,29 @@ def build_post(title, link):
     return text
 
 
+def is_retryable_login_error(exc):
+    name = exc.__class__.__name__.lower()
+    message = str(exc).lower()
+    return "timeout" in name or "timeout" in message or "connection" in name
+
+
+def login_with_retry(client, handle, password):
+    for attempt in range(1, BLUESKY_LOGIN_ATTEMPTS + 1):
+        try:
+            return client.login(handle, password)
+        except Exception as exc:
+            if attempt == BLUESKY_LOGIN_ATTEMPTS or not is_retryable_login_error(exc):
+                raise
+            print(
+                f"Bluesky login failed with {exc.__class__.__name__}. "
+                f"Retrying in {BLUESKY_LOGIN_RETRY_SECONDS}s ({attempt}/{BLUESKY_LOGIN_ATTEMPTS}).",
+                file=sys.stderr,
+            )
+            time.sleep(BLUESKY_LOGIN_RETRY_SECONDS)
+
+    return None
+
+
 def main():
     feed = feedparser.parse(RSS_URL)
     if feed.bozo:
@@ -93,7 +119,7 @@ def main():
     client = None
     if not DRY_RUN:
         client = Client()
-        client.login(os.environ["BLUESKY_HANDLE"], os.environ["BLUESKY_APP_PASSWORD"])
+        login_with_retry(client, os.environ["BLUESKY_HANDLE"], os.environ["BLUESKY_APP_PASSWORD"])
 
     for entry in targets:
         title = entry.get("title", "New article").strip()
