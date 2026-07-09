@@ -1,8 +1,9 @@
-name: Post blog articles to Bluesky
+name: Post blog articles to Bluesky and Threads
 
 on:
-  schedule:
-    - cron: "2,12,22,32,42,52 * * * *"
+  repository_dispatch:
+    types:
+      - bluesky-auto-post
   workflow_dispatch:
 
 permissions:
@@ -17,14 +18,14 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Acquire Bluesky run lock
+      - name: Acquire social posting lock
         id: lock
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          lock_branch="actions-locks/bluesky-auto-post"
+          lock_branch="actions-locks/social-auto-post"
           lock_ref="refs/heads/$lock_branch"
           remote_ref="refs/remotes/origin/$lock_branch"
 
@@ -36,7 +37,7 @@ jobs:
             now=$(date +%s)
 
             if [ $((now - lock_time)) -lt 600 ]; then
-              echo "Another Bluesky run is active; skipping this run."
+              echo "Another social posting run is active; skipping this run."
               echo "acquired=false" >> "$GITHUB_OUTPUT"
               exit 0
             fi
@@ -44,12 +45,12 @@ jobs:
             git push --force-with-lease="$lock_ref:$lock_sha" origin ":$lock_ref" || true
           fi
 
-          lock_commit=$(printf 'Lock Bluesky run %s\n' "$GITHUB_RUN_ID" | git commit-tree "$(git write-tree)" -p HEAD)
+          lock_commit=$(printf 'Lock social posting run %s\n' "$GITHUB_RUN_ID" | git commit-tree "$(git write-tree)" -p HEAD)
           if git push origin "$lock_commit:$lock_ref"; then
             echo "acquired=true" >> "$GITHUB_OUTPUT"
             echo "sha=$lock_commit" >> "$GITHUB_OUTPUT"
           else
-            echo "Another Bluesky run acquired the lock; skipping this run."
+            echo "Another social posting run acquired the lock; skipping this run."
             echo "acquired=false" >> "$GITHUB_OUTPUT"
           fi
 
@@ -65,10 +66,12 @@ jobs:
 
       - name: Install dependencies
         if: steps.lock.outputs.acquired == 'true'
-        run: python -m pip install atproto feedparser
+        run: python -m pip install atproto feedparser requests
 
-      - name: Post new articles
+      - name: Post new articles to Bluesky
+        id: bluesky
         if: steps.lock.outputs.acquired == 'true'
+        continue-on-error: true
         run: python scripts/post_to_bluesky.py
         env:
           BLOG_RSS_URL: "https://hero-news.com/feed"
@@ -76,14 +79,25 @@ jobs:
           BLUESKY_APP_PASSWORD: ${{ secrets.BLUESKY_APP_PASSWORD }}
           MAX_POSTS: "20"
 
+      - name: Post new articles to Threads
+        id: threads
+        if: steps.lock.outputs.acquired == 'true'
+        continue-on-error: true
+        run: python scripts/post_to_threads.py
+        env:
+          BLOG_RSS_URL: "https://hero-news.com/feed"
+          THREADS_USER_ID: ${{ secrets.THREADS_USER_ID }}
+          THREADS_ACCESS_TOKEN: ${{ secrets.THREADS_ACCESS_TOKEN }}
+          MAX_POSTS: "20"
+
       - name: Save posted state
         if: always() && steps.lock.outputs.acquired == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add .bluesky-posted.json
+          git add .bluesky-posted.json .threads-posted.json
           git diff --cached --quiet && exit 0
-          git commit -m "Update Bluesky auto-post state"
+          git commit -m "Update social auto-post state"
 
           for attempt in 1 2 3 4 5; do
             if git pull --rebase origin main && git push; then
@@ -95,11 +109,15 @@ jobs:
 
           exit 1
 
-      - name: Release Bluesky run lock
+      - name: Release social posting lock
         if: always() && steps.lock.outputs.acquired == 'true'
         shell: bash
         env:
           LOCK_SHA: ${{ steps.lock.outputs.sha }}
         run: |
-          lock_ref="refs/heads/actions-locks/bluesky-auto-post"
+          lock_ref="refs/heads/actions-locks/social-auto-post"
           git push --force-with-lease="$lock_ref:$LOCK_SHA" origin ":$lock_ref" || true
+
+      - name: Report posting failure
+        if: always() && steps.lock.outputs.acquired == 'true' && (steps.bluesky.outcome == 'failure' || steps.threads.outcome == 'failure')
+        run: exit 1
