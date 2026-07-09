@@ -1,9 +1,8 @@
 name: Post blog articles to Bluesky
 
 on:
-  repository_dispatch:
-    types:
-      - bluesky-auto-post
+  schedule:
+    - cron: "2,12,22,32,42,52 * * * *"
   workflow_dispatch:
 
 permissions:
