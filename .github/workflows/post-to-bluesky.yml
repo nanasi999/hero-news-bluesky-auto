@@ -6,10 +6,6 @@ on:
       - bluesky-auto-post
   workflow_dispatch:
 
-concurrency:
-  group: bluesky-auto-post
-  cancel-in-progress: false
-
 permissions:
   contents: write
 
@@ -22,18 +18,58 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Acquire Bluesky run lock
+        id: lock
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          lock_branch="actions-locks/bluesky-auto-post"
+          lock_ref="refs/heads/$lock_branch"
+          remote_ref="refs/remotes/origin/$lock_branch"
+
+          git fetch origin "$lock_ref:$remote_ref" || true
+
+          if git rev-parse --verify "$remote_ref" >/dev/null 2>&1; then
+            lock_sha=$(git rev-parse "$remote_ref")
+            lock_time=$(git show -s --format=%ct "$lock_sha")
+            now=$(date +%s)
+
+            if [ $((now - lock_time)) -lt 600 ]; then
+              echo "Another Bluesky run is active; skipping this run."
+              echo "acquired=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            git push --force-with-lease="$lock_ref:$lock_sha" origin ":$lock_ref" || true
+          fi
+
+          lock_commit=$(printf 'Lock Bluesky run %s\n' "$GITHUB_RUN_ID" | git commit-tree "$(git write-tree)" -p HEAD)
+          if git push origin "$lock_commit:$lock_ref"; then
+            echo "acquired=true" >> "$GITHUB_OUTPUT"
+            echo "sha=$lock_commit" >> "$GITHUB_OUTPUT"
+          else
+            echo "Another Bluesky run acquired the lock; skipping this run."
+            echo "acquired=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Sync latest posted state
+        if: steps.lock.outputs.acquired == 'true'
         run: git pull --ff-only origin main
 
       - name: Set up Python
+        if: steps.lock.outputs.acquired == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
       - name: Install dependencies
+        if: steps.lock.outputs.acquired == 'true'
         run: python -m pip install atproto feedparser
 
       - name: Post new articles
+        if: steps.lock.outputs.acquired == 'true'
         run: python scripts/post_to_bluesky.py
         env:
           BLOG_RSS_URL: "https://hero-news.com/feed"
@@ -42,7 +78,7 @@ jobs:
           MAX_POSTS: "20"
 
       - name: Save posted state
-        if: always()
+        if: always() && steps.lock.outputs.acquired == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -59,3 +95,12 @@ jobs:
           done
 
           exit 1
+
+      - name: Release Bluesky run lock
+        if: always() && steps.lock.outputs.acquired == 'true'
+        shell: bash
+        env:
+          LOCK_SHA: ${{ steps.lock.outputs.sha }}
+        run: |
+          lock_ref="refs/heads/actions-locks/bluesky-auto-post"
+          git push --force-with-lease="$lock_ref:$LOCK_SHA" origin ":$lock_ref" || true
