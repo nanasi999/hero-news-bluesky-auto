@@ -29,7 +29,9 @@ jobs:
           lock_ref="refs/heads/$lock_branch"
           remote_ref="refs/remotes/origin/$lock_branch"
 
-          git fetch origin "$lock_ref:$remote_ref" || true
+          if git ls-remote --exit-code --heads origin "$lock_branch" >/dev/null 2>&1; then
+            git fetch origin "$lock_ref:$remote_ref"
+          fi
 
           if git rev-parse --verify "$remote_ref" >/dev/null 2>&1; then
             lock_sha=$(git rev-parse "$remote_ref")
@@ -118,6 +120,8 @@ jobs:
           lock_ref="refs/heads/actions-locks/social-auto-post"
           git push --force-with-lease="$lock_ref:$LOCK_SHA" origin ":$lock_ref" || true
 
-      - name: Report posting failure
+      - name: Report posting warning
         if: always() && steps.lock.outputs.acquired == 'true' && (steps.bluesky.outcome == 'failure' || steps.threads.outcome == 'failure')
-        run: exit 1
+        run: |
+          echo "::warning::One or more posting steps failed. Successful post state was saved; failed posts will be retried by the next automatic run."
+          exit 0
