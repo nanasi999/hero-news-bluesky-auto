@@ -60,19 +60,33 @@ jobs:
         if: steps.lock.outputs.acquired == 'true'
         run: git pull --ff-only origin main
 
-      - name: Set up Python
+      - name: Check RSS for new entries
+        id: rss
         if: steps.lock.outputs.acquired == 'true'
+        run: python3 scripts/has_new_entries.py
+        env:
+          BLOG_RSS_URL: "https://hero-news.com/feed"
+          STATE_PATHS: ".bluesky-posted.json,.threads-posted.json"
+
+      - name: Set up Python
+        id: python
+        if: steps.lock.outputs.acquired == 'true' && steps.rss.outputs.has_new == 'true'
+        continue-on-error: true
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
 
       - name: Install dependencies
-        if: steps.lock.outputs.acquired == 'true'
-        run: python -m pip install atproto feedparser requests
+        id: deps
+        if: steps.lock.outputs.acquired == 'true' && steps.rss.outputs.has_new == 'true' && steps.python.outcome == 'success'
+        continue-on-error: true
+        run: python -m pip install -r requirements.txt
 
       - name: Post new articles to Bluesky
         id: bluesky
-        if: steps.lock.outputs.acquired == 'true'
+        if: steps.lock.outputs.acquired == 'true' && steps.rss.outputs.has_new == 'true' && steps.deps.outcome == 'success'
         continue-on-error: true
         run: python scripts/post_to_bluesky.py
         env:
@@ -83,7 +97,7 @@ jobs:
 
       - name: Post new articles to Threads
         id: threads
-        if: steps.lock.outputs.acquired == 'true'
+        if: steps.lock.outputs.acquired == 'true' && steps.rss.outputs.has_new == 'true' && steps.deps.outcome == 'success'
         continue-on-error: true
         run: python scripts/post_to_threads.py
         env:
@@ -93,7 +107,7 @@ jobs:
           MAX_POSTS: "20"
 
       - name: Save posted state
-        if: always() && steps.lock.outputs.acquired == 'true'
+        if: always() && steps.lock.outputs.acquired == 'true' && steps.rss.outputs.has_new == 'true' && steps.deps.outcome == 'success'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -121,7 +135,7 @@ jobs:
           git push --force-with-lease="$lock_ref:$LOCK_SHA" origin ":$lock_ref" || true
 
       - name: Report posting warning
-        if: always() && steps.lock.outputs.acquired == 'true' && (steps.bluesky.outcome == 'failure' || steps.threads.outcome == 'failure')
+        if: always() && steps.lock.outputs.acquired == 'true' && steps.rss.outputs.has_new == 'true' && (steps.python.outcome == 'failure' || steps.deps.outcome == 'failure' || steps.bluesky.outcome == 'failure' || steps.threads.outcome == 'failure')
         run: |
-          echo "::warning::One or more posting steps failed. Successful post state was saved; failed posts will be retried by the next automatic run."
+          echo "::warning::One or more setup or posting steps failed. Successful post state was saved when possible; failed posts will be retried by the next automatic run."
           exit 0
