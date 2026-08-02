@@ -44,25 +44,35 @@ def text_or_empty(element):
     return element.text.strip()
 
 
-def parse_entry_ids(feed_bytes):
+def compact(values):
+    seen = set()
+    result = []
+    for value in values:
+        value = (value or "").strip()
+        if value and value not in seen:
+            result.append(value)
+            seen.add(value)
+    return tuple(result)
+
+
+def parse_entry_identifiers(feed_bytes):
     root = ET.fromstring(feed_bytes)
-    ids = []
+    entries = []
 
     for item in root.findall(".//item"):
-        entry_id = text_or_empty(item.find("guid")) or text_or_empty(item.find("link"))
-        if entry_id:
-            ids.append(entry_id)
+        identifiers = compact([text_or_empty(item.find("guid")), text_or_empty(item.find("link"))])
+        if identifiers:
+            entries.append(identifiers)
 
     atom_ns = "{http://www.w3.org/2005/Atom}"
     for entry in root.findall(f".//{atom_ns}entry"):
-        entry_id = text_or_empty(entry.find(f"{atom_ns}id"))
-        if not entry_id:
-            link = entry.find(f"{atom_ns}link")
-            entry_id = "" if link is None else (link.attrib.get("href") or "").strip()
-        if entry_id:
-            ids.append(entry_id)
+        link = entry.find(f"{atom_ns}link")
+        link_href = "" if link is None else (link.attrib.get("href") or "")
+        identifiers = compact([text_or_empty(entry.find(f"{atom_ns}id")), link_href])
+        if identifiers:
+            entries.append(identifiers)
 
-    return ids
+    return entries
 
 
 def fetch_feed():
@@ -90,17 +100,21 @@ def main():
         return finish(True, "no state files configured")
 
     try:
-        entry_ids = parse_entry_ids(fetch_feed())
+        entries = parse_entry_identifiers(fetch_feed())
     except Exception as exc:
         print(f"RSS precheck failed: {exc}", file=sys.stderr)
         return finish(False, "feed unavailable or unparsable")
 
-    if not entry_ids:
+    if not entries:
         return finish(False, "no feed entries")
 
     new_count = 0
-    for entry_id in entry_ids:
-        if any(entry_id not in posted for posted in posted_sets):
+    for identifiers in entries:
+        missing_from_any_platform = any(
+            all(identifier not in posted for identifier in identifiers)
+            for posted in posted_sets
+        )
+        if missing_from_any_platform:
             new_count += 1
 
     if new_count == 0:
