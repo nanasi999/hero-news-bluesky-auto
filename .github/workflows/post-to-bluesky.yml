@@ -2,7 +2,10 @@ name: Post blog articles to Bluesky and Threads
 
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "17,47 * * * *"
+  repository_dispatch:
+    types:
+      - bluesky-auto-post
   workflow_dispatch:
 
 permissions:
@@ -10,6 +13,10 @@ permissions:
 
 jobs:
   post:
+    if: >
+      github.event_name != 'repository_dispatch' ||
+      endsWith(format('{0}', github.run_number), '0') ||
+      endsWith(format('{0}', github.run_number), '5')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
