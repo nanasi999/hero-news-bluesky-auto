@@ -1,0 +1,60 @@
+name: Refresh Threads access token
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/refresh-threads-token.yml"
+      - "scripts/threads_token_store.py"
+  schedule:
+    - cron: "23 3 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: refresh-threads-token
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install token refresh dependencies
+        run: python -m pip install "cryptography>=41,<51" "requests>=2.31,<3"
+
+      - name: Refresh and verify Threads access token
+        env:
+          THREADS_TOKEN_SEED: ${{ secrets.THREADS_ACCESS_TOKEN }}
+          THREADS_USER_ID: ${{ secrets.THREADS_USER_ID }}
+        run: python scripts/threads_token_store.py refresh
+
+      - name: Save encrypted Threads token
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .threads-token.enc .threads-token-refresh.json
+          git diff --cached --quiet && exit 0
+          git commit -m "Refresh encrypted Threads access token"
+
+          for attempt in 1 2 3 4 5; do
+            if git pull --rebase origin main && git push; then
+              exit 0
+            fi
+            git rebase --abort || true
+            sleep $((attempt * 5))
+          done
+
+          exit 1
