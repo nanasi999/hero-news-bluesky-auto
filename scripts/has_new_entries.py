@@ -5,7 +5,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from blog_entries import fetch_wordpress_entries
+from blog_entries import fetch_homepage_entries, fetch_wordpress_entries
 
 
 RSS_URL = os.environ.get("BLOG_RSS_URL", "https://hero-news.com/feed")
@@ -110,13 +110,35 @@ def main():
         ]
         entries = [identifiers for identifiers in entries if identifiers]
     except Exception as api_exc:
-        print(f"WordPress API precheck failed, falling back to RSS: {api_exc}", file=sys.stderr)
-        source = "rss"
+        print(f"WordPress API precheck failed, using RSS and homepage: {api_exc}", file=sys.stderr)
+        source = "rss and homepage"
+        entries = []
         try:
             entries = parse_entry_identifiers(fetch_feed())
         except Exception as rss_exc:
             print(f"RSS precheck failed: {rss_exc}", file=sys.stderr)
-            return finish(False, "wordpress api and rss unavailable or unparsable")
+
+        known_identifiers = {
+            identifier
+            for identifiers in entries
+            for identifier in identifiers
+        }
+        try:
+            homepage_entries = fetch_homepage_entries(RSS_URL)
+            for entry in homepage_entries:
+                identifiers = compact(
+                    [entry.get("id"), entry.get("guid"), entry.get("link")]
+                )
+                if identifiers and not any(
+                    identifier in known_identifiers for identifier in identifiers
+                ):
+                    entries.append(identifiers)
+                    known_identifiers.update(identifiers)
+        except Exception as homepage_exc:
+            print(f"Homepage precheck failed: {homepage_exc}", file=sys.stderr)
+
+        if not entries:
+            return finish(False, "wordpress api, rss, and homepage unavailable or unparsable")
 
     if not entries:
         return finish(False, f"no entries from {source}")
