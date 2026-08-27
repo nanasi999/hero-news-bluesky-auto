@@ -5,6 +5,8 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+from blog_entries import fetch_wordpress_entries
+
 
 RSS_URL = os.environ.get("BLOG_RSS_URL", "https://hero-news.com/feed")
 STATE_PATHS = [
@@ -99,14 +101,25 @@ def main():
     if not posted_sets:
         return finish(True, "no state files configured")
 
+    source = "wordpress api"
     try:
-        entries = parse_entry_identifiers(fetch_feed())
-    except Exception as exc:
-        print(f"RSS precheck failed: {exc}", file=sys.stderr)
-        return finish(False, "feed unavailable or unparsable")
+        api_entries = fetch_wordpress_entries(RSS_URL)
+        entries = [
+            compact([entry.get("id"), entry.get("guid"), entry.get("link")])
+            for entry in api_entries
+        ]
+        entries = [identifiers for identifiers in entries if identifiers]
+    except Exception as api_exc:
+        print(f"WordPress API precheck failed, falling back to RSS: {api_exc}", file=sys.stderr)
+        source = "rss"
+        try:
+            entries = parse_entry_identifiers(fetch_feed())
+        except Exception as rss_exc:
+            print(f"RSS precheck failed: {rss_exc}", file=sys.stderr)
+            return finish(False, "wordpress api and rss unavailable or unparsable")
 
     if not entries:
-        return finish(False, "no feed entries")
+        return finish(False, f"no entries from {source}")
 
     new_count = 0
     for identifiers in entries:
@@ -118,9 +131,9 @@ def main():
             new_count += 1
 
     if new_count == 0:
-        return finish(False, "all feed entries already posted")
+        return finish(False, f"all {source} entries already posted")
 
-    return finish(True, "new entries found", new_count)
+    return finish(True, f"new entries found via {source}", new_count)
 
 
 if __name__ == "__main__":
