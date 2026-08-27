@@ -8,7 +8,7 @@ from pathlib import Path
 import feedparser
 import requests
 
-from blog_entries import fetch_wordpress_entries
+from blog_entries import fetch_homepage_entries, fetch_wordpress_entries
 
 
 RSS_URL = os.environ.get("BLOG_RSS_URL", "https://hero-news.com/feed")
@@ -35,8 +35,20 @@ def save_state(state):
         f.write("\n")
 
 
+def get_entry_identifiers(entry):
+    seen = set()
+    identifiers = []
+    for value in (entry.get("id"), entry.get("guid"), entry.get("link")):
+        value = (value or "").strip()
+        if value and value not in seen:
+            identifiers.append(value)
+            seen.add(value)
+    return tuple(identifiers)
+
+
 def get_entry_id(entry):
-    return entry.get("id") or entry.get("guid") or entry.get("link")
+    identifiers = get_entry_identifiers(entry)
+    return identifiers[0] if identifiers else None
 
 
 def get_entry_date(entry):
@@ -131,18 +143,34 @@ def main():
         entries = fetch_wordpress_entries(RSS_URL)
         print(f"Loaded {len(entries)} entries from WordPress API.")
     except Exception as api_exc:
-        print(f"WordPress API failed, falling back to RSS: {api_exc}", file=sys.stderr)
+        print(f"WordPress API failed, using RSS and homepage: {api_exc}", file=sys.stderr)
         feed = feedparser.parse(RSS_URL)
         if feed.bozo:
             print(f"Feed parse warning: {feed.bozo_exception}", file=sys.stderr)
         entries = [entry for entry in feed.entries if entry.get("link")]
+        known_links = {entry.get("link") for entry in entries if entry.get("link")}
+        try:
+            homepage_entries = fetch_homepage_entries(RSS_URL)
+            entries.extend(
+                entry
+                for entry in homepage_entries
+                if entry.get("link") not in known_links
+            )
+            print(
+                f"Loaded {len(entries)} combined RSS and homepage entries."
+            )
+        except Exception as homepage_exc:
+            print(f"Homepage fallback failed: {homepage_exc}", file=sys.stderr)
 
     if not entries:
         print("No feed entries found.")
         return 0
 
-    current_ids = {get_entry_id(entry) for entry in entries}
-    current_ids.discard(None)
+    current_ids = {
+        identifier
+        for entry in entries
+        for identifier in get_entry_identifiers(entry)
+    }
 
     state = load_state()
     if state is None:
@@ -158,7 +186,14 @@ def main():
         return 0
 
     posted = set(state.get("posted", []))
-    candidates = [entry for entry in entries if get_entry_id(entry) not in posted]
+    candidates = [
+        entry
+        for entry in entries
+        if not any(
+            identifier in posted
+            for identifier in get_entry_identifiers(entry)
+        )
+    ]
 
     if not candidates:
         print("No new entries.")
@@ -185,7 +220,7 @@ def main():
         result = post_to_threads(user_id, access_token, text)
         print(f"Posted: {title} -> {result}")
 
-        posted.add(entry_id)
+        posted.update(get_entry_identifiers(entry))
         state["posted"] = sorted(posted)
         save_state(state)
 
