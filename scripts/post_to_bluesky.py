@@ -8,6 +8,8 @@ from pathlib import Path
 import feedparser
 from atproto import Client, client_utils
 
+from blog_entries import fetch_wordpress_entries
+
 
 RSS_URL = os.environ.get("BLOG_RSS_URL", "https://hero-news.com/feed")
 STATE_PATH = Path(os.environ.get("STATE_PATH", ".bluesky-posted.json"))
@@ -81,11 +83,16 @@ def login_with_retry(client, handle, password):
 
 
 def main():
-    feed = feedparser.parse(RSS_URL)
-    if feed.bozo:
-        print(f"Feed parse warning: {feed.bozo_exception}", file=sys.stderr)
+    try:
+        entries = fetch_wordpress_entries(RSS_URL)
+        print(f"Loaded {len(entries)} entries from WordPress API.")
+    except Exception as api_exc:
+        print(f"WordPress API failed, falling back to RSS: {api_exc}", file=sys.stderr)
+        feed = feedparser.parse(RSS_URL)
+        if feed.bozo:
+            print(f"Feed parse warning: {feed.bozo_exception}", file=sys.stderr)
+        entries = [entry for entry in feed.entries if entry.get("link")]
 
-    entries = [entry for entry in feed.entries if entry.get("link")]
     if not entries:
         print("No feed entries found.")
         return 0
