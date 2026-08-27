@@ -1,7 +1,5 @@
 import html
-import json
 import os
-import re
 import time
 import urllib.parse
 import urllib.request
@@ -10,7 +8,6 @@ from html.parser import HTMLParser
 
 
 REQUEST_TIMEOUT = int(os.environ.get("BLOG_SOURCE_TIMEOUT", "30"))
-API_ENTRY_LIMIT = int(os.environ.get("BLOG_API_ENTRY_LIMIT", "50"))
 HOMEPAGE_MAX_AGE_DAYS = int(os.environ.get("BLOG_HOMEPAGE_MAX_AGE_DAYS", "2"))
 
 
@@ -19,11 +16,11 @@ def _site_origin(rss_url):
     return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, "", "", "")).rstrip("/")
 
 
-def _request(url, accept):
+def _request(url):
     request = urllib.request.Request(
         url,
         headers={
-            "Accept": accept,
+            "Accept": "text/html",
             "Cache-Control": "no-cache",
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -35,70 +32,14 @@ def _request(url, accept):
         return response.read()
 
 
-def _api_url(rss_url):
-    configured = os.environ.get("BLOG_API_URL", "").strip()
-    if configured:
-        return configured
-
-    query = urllib.parse.urlencode(
-        {
-            "per_page": API_ENTRY_LIMIT,
-            "orderby": "date",
-            "order": "desc",
-            "_fields": "id,link,date_gmt,modified_gmt,title",
-        }
-    )
-    return f"{_site_origin(rss_url)}/wp-json/wp/v2/posts?{query}"
-
-
-def _clean_title(value):
-    rendered = value.get("rendered", "") if isinstance(value, dict) else str(value or "")
-    return html.unescape(re.sub(r"<[^>]+>", "", rendered)).strip()
-
-
 def _parse_date(value):
     value = str(value or "").strip()
     if not value:
         return None
     try:
-        return time.strptime(value[:19], "%Y-%m-%dT%H:%M:%S")
+        return time.strptime(value[:10], "%Y-%m-%d")
     except ValueError:
-        try:
-            return time.strptime(value[:10], "%Y-%m-%d")
-        except ValueError:
-            return None
-
-
-def fetch_wordpress_entries(rss_url):
-    origin = _site_origin(rss_url)
-    payload = json.loads(_request(_api_url(rss_url), "application/json"))
-
-    if not isinstance(payload, list) or not payload:
-        raise RuntimeError("WordPress API returned no posts.")
-
-    entries = []
-    for post in payload:
-        post_id = post.get("id")
-        link = str(post.get("link", "")).strip()
-        if not post_id or not link:
-            continue
-
-        identifier = f"{origin}/?p={post_id}"
-        published = post.get("date_gmt") or post.get("modified_gmt")
-        entries.append(
-            {
-                "id": identifier,
-                "guid": identifier,
-                "link": link,
-                "title": _clean_title(post.get("title")),
-                "published": published,
-                "published_parsed": _parse_date(published),
-            }
-        )
-
-    if not entries:
-        raise RuntimeError("WordPress API returned no usable posts.")
-    return entries
+        return None
 
 
 class _HomepageParser(HTMLParser):
@@ -146,7 +87,7 @@ class _HomepageParser(HTMLParser):
 def fetch_homepage_entries(rss_url):
     origin = _site_origin(rss_url)
     parser = _HomepageParser()
-    parser.feed(_request(f"{origin}/", "text/html").decode("utf-8", errors="replace"))
+    parser.feed(_request(f"{origin}/").decode("utf-8", errors="replace"))
 
     cutoff = date.today() - timedelta(days=HOMEPAGE_MAX_AGE_DAYS)
     recent = []
@@ -155,9 +96,8 @@ def fetch_homepage_entries(rss_url):
             published_date = date.fromisoformat(item["date"])
         except ValueError:
             continue
-        if published_date < cutoff:
-            continue
-        recent.append(item)
+        if published_date >= cutoff:
+            recent.append(item)
 
     entries = []
     total = len(recent)
