@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - ".github/workflows/post-to-bluesky.yml"
+      - "scripts/**"
   schedule:
     - cron: "17,47 * * * *"
   repository_dispatch:
