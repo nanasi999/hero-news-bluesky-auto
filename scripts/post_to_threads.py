@@ -8,7 +8,7 @@ from pathlib import Path
 import feedparser
 import requests
 
-from blog_entries import fetch_homepage_entries, fetch_wordpress_entries
+from blog_entries import fetch_homepage_entries
 
 
 RSS_URL = os.environ.get("BLOG_RSS_URL", "https://hero-news.com/feed")
@@ -139,28 +139,21 @@ def post_to_threads(user_id, access_token, text):
 
 
 def main():
+    feed = feedparser.parse(RSS_URL)
+    if feed.bozo:
+        print(f"Feed parse warning: {feed.bozo_exception}", file=sys.stderr)
+    entries = [entry for entry in feed.entries if entry.get("link")]
+    known_links = {entry.get("link") for entry in entries if entry.get("link")}
     try:
-        entries = fetch_wordpress_entries(RSS_URL)
-        print(f"Loaded {len(entries)} entries from WordPress API.")
-    except Exception as api_exc:
-        print(f"WordPress API failed, using RSS and homepage: {api_exc}", file=sys.stderr)
-        feed = feedparser.parse(RSS_URL)
-        if feed.bozo:
-            print(f"Feed parse warning: {feed.bozo_exception}", file=sys.stderr)
-        entries = [entry for entry in feed.entries if entry.get("link")]
-        known_links = {entry.get("link") for entry in entries if entry.get("link")}
-        try:
-            homepage_entries = fetch_homepage_entries(RSS_URL)
-            entries.extend(
-                entry
-                for entry in homepage_entries
-                if entry.get("link") not in known_links
-            )
-            print(
-                f"Loaded {len(entries)} combined RSS and homepage entries."
-            )
-        except Exception as homepage_exc:
-            print(f"Homepage fallback failed: {homepage_exc}", file=sys.stderr)
+        homepage_entries = fetch_homepage_entries(RSS_URL)
+        entries.extend(
+            entry
+            for entry in homepage_entries
+            if entry.get("link") not in known_links
+        )
+        print(f"Loaded {len(entries)} combined RSS and homepage entries.")
+    except Exception as homepage_exc:
+        print(f"Homepage fallback failed: {homepage_exc}", file=sys.stderr)
 
     if not entries:
         print("No feed entries found.")
