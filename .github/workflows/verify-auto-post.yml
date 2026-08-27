@@ -28,7 +28,7 @@ jobs:
         run: python -m pip install atproto feedparser requests "cryptography>=41,<51"
 
       - name: Check Python syntax
-        run: python -m py_compile scripts/post_to_bluesky.py scripts/post_to_threads.py scripts/threads_token_store.py
+        run: python -m py_compile scripts/blog_entries.py scripts/has_new_entries.py scripts/post_to_bluesky.py scripts/post_to_threads.py scripts/threads_token_store.py
 
       - name: Test Threads token encryption
         shell: bash
