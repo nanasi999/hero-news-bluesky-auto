@@ -1,3 +1,0 @@
-atproto
-feedparser
-requests
