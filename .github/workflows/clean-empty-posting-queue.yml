@@ -35,5 +35,7 @@ jobs:
                 core.info('Verified empty stale queue record removed.');
               }
             } catch (error) {
-              core.setFailed('Queue cleanup stopped: HTTP ' + (error.status || 'precondition'));
+              const message = String(error.response?.data?.message || 'No API message');
+              const safe = message.replace(/[^a-zA-Z0-9 .,:'()_-]/g, '?').slice(0, 250);
+              core.setFailed('Queue cleanup stopped: HTTP ' + (error.status || 'precondition') + '; API message: ' + safe);
             }
