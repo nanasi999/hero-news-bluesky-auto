@@ -27,10 +27,15 @@ jobs:
                 let {data: run} = await github.rest.actions.getWorkflowRun(args);
                 if (run.status === 'completed') continue;
                 if (run.status !== 'queued' || run.head_sha !== sha ||
-                    run.path !== '.github/workflows/post-to-bluesky.yml') {
+                    String(run.path).split('@')[0] !== '.github/workflows/post-to-bluesky.yml') {
                   throw new Error('Unexpected old run state');
                 }
-                await github.rest.actions.cancelWorkflowRun(args);
+                try {
+                  await github.rest.actions.cancelWorkflowRun(args);
+                } catch (error) {
+                  if (error.status !== 409) throw error;
+                  await github.request('POST /repos/{owner}/{repo}/actions/runs/{run_id}/force-cancel', args);
+                }
                 for (let n = 0; n < 18; n++) {
                   await new Promise(resolve => setTimeout(resolve, 5000));
                   ({data: run} = await github.rest.actions.getWorkflowRun(args));
@@ -42,6 +47,9 @@ jobs:
                 ...context.repo, workflow_id: 'post-to-bluesky.yml', ref: 'main'
               });
               core.info('Old queued runs retired; normal posting verification dispatched.');
-            } catch (_) {
-              core.setFailed('Migration cleanup not confirmed; no additional runs changed.');
+            } catch (error) {
+              const known = ['Unexpected old run state', 'Cancellation not confirmed'];
+              const reason = known.includes(error.message) ? error.message : 'HTTP ' + (error.status || 'unknown');
+              core.setFailed('Migration cleanup not confirmed: ' + reason);
+
             }
