@@ -120,3 +120,4 @@ def fetch_homepage_entries(rss_url):
     if not entries:
         raise RuntimeError("Homepage returned no recent posts.")
     return entries
+
