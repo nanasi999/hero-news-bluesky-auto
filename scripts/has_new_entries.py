@@ -8,7 +8,7 @@ from pathlib import Path
 from blog_entries import fetch_homepage_entries
 
 
-RSS_URL = os.environ.get("BLOG_RSS_URL", "https://example.invalid/feed")
+RSS_URL = os.environ.get("BLOG_RSS_URL", "https://hero-news.com/feed")
 STATE_PATHS = [
     Path(path.strip())
     for path in os.environ.get("STATE_PATHS", ".bluesky-posted.json,.threads-posted.json").split(",")
@@ -59,8 +59,6 @@ def compact(values):
 
 def parse_entry_identifiers(feed_bytes):
     root = ET.fromstring(feed_bytes)
-    if root.tag not in {"rss", "{http://www.w3.org/2005/Atom}feed", "{http://www.w3.org/1999/02/22-rdf-syntax-ns#}RDF"}:
-        raise ValueError("Unrecognized feed")
     entries = []
 
     for item in root.findall(".//item"):
@@ -105,10 +103,8 @@ def main():
 
     source = "rss and homepage"
     entries = []
-    valid_feed = False
     try:
         entries = parse_entry_identifiers(fetch_feed())
-        valid_feed = True
     except Exception as rss_exc:
         print(f"RSS precheck failed: {rss_exc}", file=sys.stderr)
 
@@ -132,12 +128,7 @@ def main():
         print(f"Homepage precheck failed: {homepage_exc}", file=sys.stderr)
 
     if not entries:
-        if valid_feed:
-            return finish(False, "valid feed without entries")
-        set_output("has_new", "false")
-        set_output("source_error", "true")
-        print("Source acquisition failed.", file=sys.stderr)
-        return 1
+        return finish(False, "rss and homepage unavailable or unparsable")
 
     new_count = 0
     for identifiers in entries:
@@ -156,4 +147,3 @@ def main():
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

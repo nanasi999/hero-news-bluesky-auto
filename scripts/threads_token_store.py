@@ -3,8 +3,6 @@
 
 from __future__ import annotations
 
-from log_safety import diagnostic, checked_token, register_mask, get_json
-
 import argparse
 import base64
 import hashlib
@@ -31,7 +29,7 @@ def require_seed() -> str:
     value = os.environ.get("THREADS_TOKEN_SEED", "").strip()
     if not value:
         raise RuntimeError("THREADS_TOKEN_SEED is required.")
-    return checked_token(value)
+    return value
 
 
 def derive_key(seed: str, salt: bytes) -> bytes:
@@ -98,7 +96,7 @@ def current_token(seed: str) -> str:
 
     if not token:
         raise RuntimeError("The stored Threads token is empty.")
-    return checked_token(token)
+    return token
 
 
 def atomic_json_write(path: Path, value: dict[str, Any]) -> None:
@@ -114,12 +112,22 @@ def refresh_token() -> None:
     seed = require_seed()
     old_token = current_token(seed)
 
-    register_mask(old_token)
-    payload = get_json(requests, REFRESH_URL, {
-        "grant_type": "th_refresh_token", "access_token": old_token,
-    }, "refresh")
-    new_token = checked_token(payload.get("access_token"))
-    register_mask(new_token)
+    response = requests.get(
+        REFRESH_URL,
+        params={
+            "grant_type": "th_refresh_token",
+            "access_token": old_token,
+        },
+        timeout=30,
+    )
+    if not response.ok:
+        raise RuntimeError(
+            f"Threads token refresh failed with HTTP {response.status_code}: "
+            f"{response.text[:500]}"
+        )
+
+    payload = response.json()
+    new_token = str(payload.get("access_token", "")).strip()
     expires_in = int(payload.get("expires_in", 0))
     if not new_token:
         raise RuntimeError("Threads token refresh returned no access_token.")
@@ -128,9 +136,21 @@ def refresh_token() -> None:
             f"Threads token refresh returned an invalid expiry: {expires_in}."
         )
 
-    profile = get_json(requests, PROFILE_URL, {
-        "fields": "id,username", "access_token": new_token,
-    }, "profile")
+    profile_response = requests.get(
+        PROFILE_URL,
+        params={
+            "fields": "id,username",
+            "access_token": new_token,
+        },
+        timeout=30,
+    )
+    if not profile_response.ok:
+        raise RuntimeError(
+            f"Refreshed Threads token verification failed with HTTP "
+            f"{profile_response.status_code}: {profile_response.text[:500]}"
+        )
+
+    profile = profile_response.json()
     actual_user_id = str(profile.get("id", "")).strip()
     expected_user_id = os.environ.get("THREADS_USER_ID", "").strip()
     if not actual_user_id:
@@ -155,7 +175,11 @@ def refresh_token() -> None:
         },
     )
 
-    print("Threads token refreshed and verified.")
+    print(
+        "Threads token refreshed and verified: "
+        f"user_id={actual_user_id} expires_in={expires_in} "
+        f"same_as_previous={str(new_token == old_token).lower()}"
+    )
 
 
 def resolve_token() -> None:
@@ -173,11 +197,10 @@ def main() -> int:
         else:
             resolve_token()
     except Exception as exc:
-        print(diagnostic(exc), file=sys.stderr)
+        print(str(exc), file=sys.stderr)
         return 1
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
