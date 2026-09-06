@@ -199,6 +199,59 @@ class ReleaseTests(unittest.TestCase):
     def test_missing_state_fails_closed(self):
         with self.assertRaises(SafeFailure):production.read_state(lambda *a,**k:(404,{}),".threads-posted.json")
 
+    def nonposting_fixture(self, run_id=32219049176):
+        number,sha=production.NONPOSTING_RUNS[run_id]
+        run={"id":run_id,"run_number":number,"head_sha":sha,"run_attempt":1,
+             "status":"queued","event":"repository_dispatch",
+             "path":".github/workflows/post-to-bluesky.yml"}
+        def http(method,path,**kw):
+            self.assertEqual(method,"GET")
+            if path=="/actions/runs":
+                rows=[run] if kw["params"]["status"]==run["status"] else []
+                return 200,{"total_count":len(rows),"workflow_runs":rows}
+            if path.endswith(".yml"):
+                self.assertEqual(kw["params"]["ref"],sha)
+                return 200,{"sha":production.NONPOSTING_WORKFLOW_BLOB}
+            if path.endswith("/jobs"):
+                self.assertEqual(kw["params"]["filter"],"all")
+                return 200,{"total_count":0,"jobs":[]}
+            return 404,{}
+        return run,http
+
+    def test_all_three_false_job_conditions_allow_migration(self):
+        for run_id in production.NONPOSTING_RUNS:
+            with self.subTest(run_id=run_id):
+                run,http=self.nonposting_fixture(run_id)
+                self.assertFalse(production.legacy_active(http,1))
+
+    def test_nonposting_metadata_changes_block_migration(self):
+        for key,value in {"id":999,"run_number":18455,"head_sha":"different",
+                          "run_attempt":2,"status":"in_progress",
+                          "event":"workflow_dispatch"}.items():
+            with self.subTest(field=key):
+                run,http=self.nonposting_fixture()
+                run[key]=value
+                self.assertTrue(production.legacy_active(http,1))
+
+    def test_nonposting_proof_api_failure_or_jobs_blocks(self):
+        for suffix,result in [(".yml",(403,{})),(".yml",(200,{"sha":"changed"})),
+                              ("/jobs",(500,{})),("/jobs",(200,{})),
+                              ("/jobs",(200,{"total_count":1,"jobs":[{}]})),
+                              ("/jobs",(200,{"total_count":0,"jobs":[{}]}))]:
+            with self.subTest(suffix=suffix,result=result):
+                run,http=self.nonposting_fixture()
+                def failing(method,path,**kw):
+                    return result if path.endswith(suffix) else http(method,path,**kw)
+                self.assertTrue(production.legacy_active(failing,1))
+
+    def test_job_condition_truth_table_independent(self):
+        for number in range(18420,18461):
+            expression=("repository_dispatch" != "repository_dispatch" or
+                        str(number).endswith("0") or str(number).endswith("5"))
+            self.assertEqual(expression, number % 5 == 0)
+        for number,sha in production.NONPOSTING_RUNS.values():
+            self.assertNotEqual(number % 5,0)
+
     def test_production_guard(self):
         with patch.object(sys,"argv",["production"]),contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(production.main(),1)
@@ -225,4 +278,3 @@ class ReleaseTests(unittest.TestCase):
 
 if __name__=="__main__":
     unittest.main(verbosity=2)
-

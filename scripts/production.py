@@ -19,6 +19,34 @@ from test_runtime import Runtime
 LEDGER_BRANCH = "actions-state/social-posting"
 STATES = {"bluesky":".bluesky-posted.json","threads":".threads-posted.json"}
 
+# This immutable workflow has one job, gated on dispatch run numbers ending 0/5.
+NONPOSTING_WORKFLOW_BLOB = "61f990765c2635c111c83fa673ae62b3a16dab21"
+NONPOSTING_RUNS = {
+    32219049176: (18453, "df52287b80a058d3f0916a28b3b854461b8a33b1"),
+    32214462577: (18437, "df52287b80a058d3f0916a28b3b854461b8a33b1"),
+    32210877705: (18423, "902385c9e59c56dc3aca139f4c3633417d6dfa26"),
+}
+
+
+def proven_nonposting(http, run):
+    expected = NONPOSTING_RUNS.get(run.get("id"))
+    if expected is None:
+        return False
+    number, sha = expected
+    if (run.get("status") != "queued" or
+            run.get("event") != "repository_dispatch" or
+            run.get("run_number") != number or str(number).endswith(("0", "5")) or
+            run.get("head_sha") != sha or run.get("run_attempt") != 1 or
+            run.get("path") != ".github/workflows/post-to-bluesky.yml"):
+        return False
+    status, workflow = response(http, "GET", "/contents/" + run["path"],
+                                params={"ref": sha})
+    if status != 200 or workflow.get("sha") != NONPOSTING_WORKFLOW_BLOB:
+        return False
+    status, jobs = response(http, "GET", "/actions/runs/" + str(run["id"]) + "/jobs",
+                           params={"filter": "all", "per_page": 100})
+    return status == 200 and jobs.get("total_count") == 0 and jobs.get("jobs") == []
+
 
 def read_state(http, path):
     status,data=response(http,"GET","/contents/"+path,params={"ref":"main"})
@@ -67,6 +95,8 @@ def legacy_active(http, current_run):
             raise SafeFailure("Active execution check unavailable")
         for run in data.get("workflow_runs",[]):
             if str(run.get("id")) == str(current_run) or run.get("path") not in posting_paths:
+                continue
+            if proven_nonposting(http, run):
                 continue
             code,_=response(http,"GET","/contents/scripts/production.py",
                             params={"ref":run["head_sha"]})
@@ -165,4 +195,3 @@ def main():
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
