@@ -1,0 +1,39 @@
+name: Clean empty stale posting queue
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/clean-empty-posting-queue.yml"]
+permissions:
+  contents: read
+  actions: write
+jobs:
+  cleanup:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const targets = [
+              [32219049176, 'df52287b80a058d3f0916a28b3b854461b8a33b1'],
+              [32214462577, 'df52287b80a058d3f0916a28b3b854461b8a33b1'],
+              [32210877705, '902385c9e59c56dc3aca139f4c3633417d6dfa26']
+            ];
+            try {
+              for (const [run_id, sha] of targets) {
+                const args = {...context.repo, run_id};
+                const {data: run} = await github.rest.actions.getWorkflowRun(args);
+                const {data: jobs} = await github.rest.actions.listJobsForWorkflowRun({...args, per_page: 100});
+                const {data: artifacts} = await github.rest.actions.listWorkflowRunArtifacts({...args, per_page: 100});
+                if (run.status !== 'queued' || run.head_sha !== sha ||
+                    !run.created_at.startsWith('2026-08-19') ||
+                    jobs.total_count !== 0 || artifacts.total_count !== 0) {
+                  throw new Error('Precondition changed');
+                }
+                await github.rest.actions.deleteWorkflowRun(args);
+                core.info('Verified empty stale queue record removed.');
+              }
+            } catch (error) {
+              core.setFailed('Queue cleanup stopped: HTTP ' + (error.status || 'precondition'));
+            }
