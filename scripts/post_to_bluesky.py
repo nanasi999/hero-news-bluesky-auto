@@ -9,9 +9,12 @@ import feedparser
 from atproto import Client, client_utils
 
 from blog_entries import fetch_homepage_entries
+from test_runtime import require_runtime
+from source_entries import collect
+from log_safety import diagnostic
 
 
-RSS_URL = os.environ.get("BLOG_RSS_URL", "https://hero-news.com/feed")
+RSS_URL = os.environ.get("BLOG_RSS_URL", "https://example.invalid/feed")
 STATE_PATH = Path(os.environ.get("STATE_PATH", ".bluesky-posted.json"))
 MAX_POSTS = int(os.environ.get("MAX_POSTS", "5"))
 DRY_RUN = os.environ.get("DRY_RUN", "").lower() in {"1", "true", "yes"}
@@ -94,25 +97,12 @@ def login_with_retry(client, handle, password):
     return None
 
 
-def main():
-    feed = feedparser.parse(RSS_URL)
-    if feed.bozo:
-        print(f"Feed parse warning: {feed.bozo_exception}", file=sys.stderr)
-    entries = [entry for entry in feed.entries if entry.get("link")]
-    known_links = {entry.get("link") for entry in entries if entry.get("link")}
-    try:
-        homepage_entries = fetch_homepage_entries(RSS_URL)
-        entries.extend(
-            entry
-            for entry in homepage_entries
-            if entry.get("link") not in known_links
-        )
-        print(f"Loaded {len(entries)} combined RSS and homepage entries.")
-    except Exception as homepage_exc:
-        print(f"Homepage fallback failed: {homepage_exc}", file=sys.stderr)
-
+def main(runtime=None):
+    if not DRY_RUN:
+        require_runtime(runtime)
+    entries = collect(feedparser.parse, fetch_homepage_entries, RSS_URL)
     if not entries:
-        print("No feed entries found.")
+        print("No new entries in valid feed.")
         return 0
 
     current_ids = {
@@ -151,10 +141,7 @@ def main():
     candidates.sort(key=get_entry_date)
     targets = candidates[:MAX_POSTS]
 
-    client = None
-    if not DRY_RUN:
-        client = Client()
-        login_with_retry(client, os.environ["BLUESKY_HANDLE"], os.environ["BLUESKY_APP_PASSWORD"])
+    failed = False
 
     for entry in targets:
         title = entry.get("title", "New article").strip()
@@ -165,15 +152,19 @@ def main():
             print(f"[DRY_RUN] Would post: {title} {link}")
             continue
 
-        result = client.send_post(build_post(title, link))
-        print(f"Posted: {title} -> {result.uri}")
+        try:
+            runtime.post("bluesky", get_entry_identifiers(entry),
+                         {"title": title, "link": link, "prefix": POST_PREFIX}, posted)
+            posted.update(get_entry_identifiers(entry))
+            state["posted"] = sorted(posted)
+            save_state(state)
+        except Exception as exc:
+            failed = True
+            print(diagnostic(exc), file=sys.stderr)
 
-        posted.update(get_entry_identifiers(entry))
-        state["posted"] = sorted(posted)
-        save_state(state)
-
-    return 0
+    return int(failed)
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

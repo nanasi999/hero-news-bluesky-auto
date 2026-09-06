@@ -1,12 +1,6 @@
 name: Refresh Threads access token
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - ".github/workflows/refresh-threads-token.yml"
-      - "scripts/threads_token_store.py"
   schedule:
     - cron: "23 3 * * 0"
   workflow_dispatch:
@@ -20,6 +14,8 @@ concurrency:
 
 jobs:
   refresh:
+    if: github.ref == 'refs/heads/main'
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -58,3 +54,4 @@ jobs:
           done
 
           exit 1
+
