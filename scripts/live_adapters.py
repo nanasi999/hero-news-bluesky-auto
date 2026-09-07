@@ -1,11 +1,26 @@
 """Bounded API adapters. Never retry an ambiguous publication."""
 import os
 import time
+import re
 from datetime import datetime, timezone
 import requests
 from atproto import Client, client_utils, models
 from log_safety import SafeFailure, checked_token, register_mask
 from post_to_bluesky import login_with_retry
+
+
+def bluesky_failure(exc):
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None)
+    content = getattr(response, "content", None)
+    code = content.get("error") if isinstance(content, dict) else getattr(content, "error", None)
+    known = {"RecordNotFound", "InvalidRequest", "InvalidToken", "ExpiredToken",
+             "AuthenticationRequired", "RateLimitExceeded"}
+    kind = code if isinstance(code, str) and code in known else "unclassified"
+    cls = type(exc).__name__
+    if cls in {"ValidationError", "AttributeError", "TypeError", "ModelError"}:
+        kind = cls
+    return ("HTTP " + str(status) + " " if type(status) is int else "") + kind
 
 
 class GitHubHTTP:
@@ -66,6 +81,20 @@ class BlueskyBackend:
             created_at=datetime.now(timezone.utc).isoformat().replace("+00:00","Z"))
         return record.model_dump(by_alias=True, exclude_none=True)
 
+    def new_bluesky_key(self, key, payload):
+        if not re.fullmatch(r"[0-9a-f]{64}", key):
+            raise SafeFailure("Invalid journal identity")
+        created = datetime.fromisoformat(payload["createdAt"].replace("Z", "+00:00"))
+        if created.tzinfo is None:
+            raise SafeFailure("Missing record timestamp timezone")
+        delta = created - datetime(1970, 1, 1, tzinfo=timezone.utc)
+        micros = (delta.days * 86400 + delta.seconds) * 1000000 + delta.microseconds
+        value = (micros << 10) | (int(key[-3:], 16) & 1023)
+        if not 0 < value < 2**63:
+            raise SafeFailure("Record timestamp out of range")
+        alphabet = "234567abcdefghijklmnopqrstuvwxyz"
+        return "".join(alphabet[(value >> shift) & 31] for shift in range(60, -1, -5))
+
     def send_bluesky(self, key, payload):
         self.connect()
         try:
@@ -73,8 +102,8 @@ class BlueskyBackend:
                 "repo":self.did, "collection":"app.bsky.feed.post",
                 "rkey":key, "record":payload})
             return {"id":result.uri}
-        except Exception:
-            raise SafeFailure("Bluesky publication uncertain") from None
+        except Exception as exc:
+            raise SafeFailure("Bluesky publication uncertain: " + bluesky_failure(exc)) from None
 
     def lookup_bluesky(self, key):
         self.connect()
@@ -85,8 +114,10 @@ class BlueskyBackend:
             if hasattr(value,"model_dump"):
                 value = value.model_dump(by_alias=True, exclude_none=True)
             return {"id":result.uri,"payload":value}
-        except Exception:
-            raise SafeFailure("Bluesky result lookup failed") from None
+        except Exception as exc:
+            if bluesky_failure(exc) == "HTTP 400 RecordNotFound":
+                return None
+            raise SafeFailure("Bluesky result lookup failed: " + bluesky_failure(exc)) from None
 
 
 class ThreadsBackend:
@@ -134,4 +165,3 @@ class ThreadsBackend:
             if attempt < 2:
                 self.sleep(10)
         return status
-

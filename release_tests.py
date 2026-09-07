@@ -16,6 +16,7 @@ import copy
 import io
 import contextlib
 import json
+import re
 import tempfile
 import types
 import unittest
@@ -96,10 +97,17 @@ class ReleaseTests(unittest.TestCase):
         self.record=None
         def create(data):
             models.ComAtprotoRepoCreateRecord.Data(**data)
+            self.assertRegex(data["rkey"],r"^[234567abcdefghij][234567abcdefghijklmnopqrstuvwxyz]{12}$")
             self.record=copy.deepcopy(data["record"])
+            self.record_key=data["rkey"]
             return types.SimpleNamespace(uri="at://did:plc:synthetic/app.bsky.feed.post/fixture")
         self.client.com.atproto.repo.create_record.side_effect=create
-        self.client.com.atproto.repo.get_record.side_effect=lambda params:types.SimpleNamespace(uri="fixture-uri",value=self.record)
+        def get(params):
+            if self.record is None or params["rkey"] != self.record_key:
+                from atproto_client.exceptions import BadRequestError
+                raise BadRequestError(types.SimpleNamespace(status_code=400,content={"error":"RecordNotFound"}))
+            return types.SimpleNamespace(uri="fixture-uri",value=self.record)
+        self.client.com.atproto.repo.get_record.side_effect=get
         self.backend=adapters.BlueskyBackend(self.client)
         self.session=Session()
         self.tb=adapters.ThreadsBackend("FAKE_TOKEN","123",self.session,lambda seconds:None)
@@ -189,6 +197,73 @@ class ReleaseTests(unittest.TestCase):
         args=session.request.call_args
         self.assertFalse(args.kwargs["allow_redirects"])
         self.assertEqual(args.kwargs["timeout"],(10,30))
+
+    def test_bluesky_safe_error_codes(self):
+        exc=Exception("FAKE_PRIVATE")
+        exc.response=types.SimpleNamespace(status_code=400,content={"error":"RecordNotFound","message":"FAKE_PRIVATE"})
+        self.assertEqual(adapters.bluesky_failure(exc),"HTTP 400 RecordNotFound")
+        exc.response.content["error"]="FAKE_PRIVATE"
+        self.assertEqual(adapters.bluesky_failure(exc),"HTTP 400 unclassified")
+
+    def test_tid_roundtrip_and_stability(self):
+        from atproto_client.models.string_formats import validate_tid
+        payload=self.backend.prepare(self.payload)
+        key=self.backend.new_bluesky_key("a"*64,payload)
+        self.assertEqual(validate_tid(key,None),key)
+        self.assertEqual(key,self.backend.new_bluesky_key("a"*64,payload))
+        value=0
+        for c in key:value=value*32+"234567abcdefghijklmnopqrstuvwxyz".index(c)
+        from datetime import datetime
+        actual=datetime.fromisoformat(payload["createdAt"].replace("Z","+00:00"))
+        self.assertAlmostEqual((value>>10)/1000000,actual.timestamp(),places=5)
+
+    def test_legacy_missing_hash_migrates_once(self):
+        import hashlib
+        self.c.acquire()
+        key=hashlib.sha256(b"bluesky\nfixture").hexdigest()
+        payload=self.backend.prepare(self.payload)
+        self.api.files["test-ledger.json"]["posts"][key]={"platform":"bluesky","identifiers":["fixture"],"payload":payload,"stage":"sending"}
+        row=self.c.post("bluesky",["fixture"],payload,self.backend,set())
+        self.assertEqual(row["stage"],"confirmed")
+        self.assertEqual(len(row["record_key"]),13)
+        self.c.post("bluesky",["fixture"],payload,self.backend,set())
+        self.assertEqual(self.client.com.atproto.repo.create_record.call_count,1)
+
+    def test_lookup_transport_failure_never_sends(self):
+        self.client.com.atproto.repo.get_record.side_effect=TimeoutError("FAKE_PRIVATE")
+        self.assertEqual(self.run_post()[0],1)
+        self.client.com.atproto.repo.create_record.assert_not_called()
+
+    def test_legacy_existing_record_is_confirmed_without_resend(self):
+        import hashlib
+        self.c.acquire()
+        key=hashlib.sha256(b"bluesky\nfixture").hexdigest()
+        payload=self.backend.prepare(self.payload)
+        self.api.files["test-ledger.json"]["posts"][key]={"platform":"bluesky","identifiers":["fixture"],"payload":payload,"stage":"sending"}
+        self.record,self.record_key=payload,key
+        self.assertEqual(self.c.post("bluesky",["fixture"],payload,self.backend,set())["stage"],"confirmed")
+        self.client.com.atproto.repo.create_record.assert_not_called()
+
+    def test_new_tid_unknown_result_is_not_blindly_retried(self):
+        self.client.com.atproto.repo.create_record.side_effect=TimeoutError("FAKE_PRIVATE")
+        self.assertEqual(self.run_post()[0],1)
+        self.assertEqual(self.run_post()[0],1)
+        self.assertEqual(self.client.com.atproto.repo.create_record.call_count,1)
+
+    def test_journal_tid_collision_prevents_send(self):
+        import hashlib
+        self.c.acquire()
+        key=hashlib.sha256(b"bluesky\nfixture").hexdigest()
+        payload=self.backend.prepare(self.payload)
+        tid=self.backend.new_bluesky_key(key,payload)
+        self.api.files["test-ledger.json"]["posts"]["other"]={"platform":"bluesky","identifiers":["other"],"payload":payload,"stage":"confirmed","record_key":tid}
+        with self.assertRaises(Held):self.c.post("bluesky",["fixture"],payload,self.backend,set())
+        self.client.com.atproto.repo.create_record.assert_not_called()
+
+    def test_remote_key_collision_never_sends(self):
+        self.client.com.atproto.repo.get_record.side_effect=lambda params:types.SimpleNamespace(uri="occupied",value={"text":"other"})
+        self.assertEqual(self.run_post()[0],1)
+        self.client.com.atproto.repo.create_record.assert_not_called()
 
     def test_legacy_run_defers(self):
         self.api.running=[{"id":2,"head_sha":"old",".github":"unused","path":".github/workflows/post-to-bluesky.yml"}]
