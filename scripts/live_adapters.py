@@ -8,6 +8,20 @@ from log_safety import SafeFailure, checked_token, register_mask
 from post_to_bluesky import login_with_retry
 
 
+def bluesky_failure(exc):
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None)
+    content = getattr(response, "content", None)
+    code = content.get("error") if isinstance(content, dict) else getattr(content, "error", None)
+    known = {"RecordNotFound", "InvalidRequest", "InvalidToken", "ExpiredToken",
+             "AuthenticationRequired", "RateLimitExceeded"}
+    kind = code if isinstance(code, str) and code in known else "unclassified"
+    cls = type(exc).__name__
+    if cls in {"ValidationError", "AttributeError", "TypeError", "ModelError"}:
+        kind = cls
+    return ("HTTP " + str(status) + " " if type(status) is int else "") + kind
+
+
 class GitHubHTTP:
     def __init__(self, repository, token, session=None):
         if len(repository.split("/")) != 2 or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_./" for c in repository):
@@ -73,8 +87,8 @@ class BlueskyBackend:
                 "repo":self.did, "collection":"app.bsky.feed.post",
                 "rkey":key, "record":payload})
             return {"id":result.uri}
-        except Exception:
-            raise SafeFailure("Bluesky publication uncertain") from None
+        except Exception as exc:
+            raise SafeFailure("Bluesky publication uncertain: " + bluesky_failure(exc)) from None
 
     def lookup_bluesky(self, key):
         self.connect()
@@ -85,8 +99,8 @@ class BlueskyBackend:
             if hasattr(value,"model_dump"):
                 value = value.model_dump(by_alias=True, exclude_none=True)
             return {"id":result.uri,"payload":value}
-        except Exception:
-            raise SafeFailure("Bluesky result lookup failed") from None
+        except Exception as exc:
+            raise SafeFailure("Bluesky result lookup failed: " + bluesky_failure(exc)) from None
 
 
 class ThreadsBackend:
@@ -134,4 +148,3 @@ class ThreadsBackend:
             if attempt < 2:
                 self.sleep(10)
         return status
-

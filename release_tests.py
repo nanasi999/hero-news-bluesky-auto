@@ -190,6 +190,13 @@ class ReleaseTests(unittest.TestCase):
         self.assertFalse(args.kwargs["allow_redirects"])
         self.assertEqual(args.kwargs["timeout"],(10,30))
 
+    def test_bluesky_safe_error_codes(self):
+        exc=Exception("FAKE_PRIVATE")
+        exc.response=types.SimpleNamespace(status_code=400,content={"error":"RecordNotFound","message":"FAKE_PRIVATE"})
+        self.assertEqual(adapters.bluesky_failure(exc),"HTTP 400 RecordNotFound")
+        exc.response.content["error"]="FAKE_PRIVATE"
+        self.assertEqual(adapters.bluesky_failure(exc),"HTTP 400 unclassified")
+
     def test_legacy_run_defers(self):
         self.api.running=[{"id":2,"head_sha":"old",".github":"unused","path":".github/workflows/post-to-bluesky.yml"}]
         self.assertTrue(production.legacy_active(self.api,1))
