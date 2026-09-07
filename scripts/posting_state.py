@@ -95,14 +95,31 @@ class Coordinator:
             return self.change(update)
 
         if platform == "bluesky":
+            record_key = row.get("record_key", key)
             if row["stage"] != "intent":
-                existing = backend.lookup_bluesky(key)
-                if existing is None or existing.get("payload") != payload or not existing.get("id"):
+                existing = backend.lookup_bluesky(record_key)
+                if existing is not None:
+                    if existing.get("payload") != payload or not existing.get("id"):
+                        raise Held("Bluesky result uncertain; no resend")
+                    return stage("confirmed", result=existing["id"])
+                # Only migrate the invalid legacy hash key after authoritative absence.
+                if "record_key" in row or not hasattr(backend, "new_bluesky_key"):
                     raise Held("Bluesky result uncertain; no resend")
-                return stage("confirmed", result=existing["id"])
+                row = stage("intent")
+            if "record_key" not in row and hasattr(backend, "new_bluesky_key"):
+                record_key = backend.new_bluesky_key(key, payload)
+                _, current = self.snapshot()
+                if any(k != key and r.get("record_key") == record_key
+                       for k, r in current["posts"].items()):
+                    raise Held("Bluesky record key collision")
+                # A remote collision must never overwrite an unrelated existing post.
+                existing = backend.lookup_bluesky(record_key)
+                if existing is not None:
+                    raise Held("Bluesky allocated key already exists")
+                row = stage("intent", record_key=record_key)
             stage("sending")
             self.before_send()
-            result = backend.send_bluesky(key, payload)
+            result = backend.send_bluesky(record_key, payload)
             if not isinstance(result, dict) or not result.get("id"):
                 raise Held("Bluesky response uncertain")
             return stage("confirmed", result=result["id"])
@@ -134,4 +151,3 @@ class Coordinator:
         if not isinstance(result, dict) or not result.get("id"):
             raise Held("Threads publication response uncertain")
         return stage("confirmed", result=result["id"])
-
