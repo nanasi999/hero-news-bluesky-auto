@@ -1,8 +1,19 @@
 """Classify usable fallback data separately from failed acquisition."""
 from log_safety import SafeFailure
+import time
 
 
-def collect(parse, homepage, url):
+def collect(parse, homepage, url, sleep=time.sleep):
+    for attempt in range(3):
+        try:
+            return _collect_once(parse, homepage, url)
+        except SafeFailure:
+            if attempt == 2:
+                raise
+            sleep(2 ** attempt)
+
+
+def _collect_once(parse, homepage, url):
     entries = []
     valid_empty = False
     try:
@@ -24,4 +35,3 @@ def collect(parse, homepage, url):
     if not entries and not valid_empty:
         raise SafeFailure("No usable source entries.")
     return entries
-

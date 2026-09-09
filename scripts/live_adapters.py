@@ -24,27 +24,44 @@ def bluesky_failure(exc):
 
 
 class GitHubHTTP:
-    def __init__(self, repository, token, session=None):
+    def __init__(self, repository, token, session=None, sleep=time.sleep):
         if len(repository.split("/")) != 2 or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_./" for c in repository):
             raise SafeFailure("Invalid repository")
         self.base = "https://api.github.com/repos/" + repository
         self.session = session or requests.Session()
+        self.sleep = sleep
         self.headers = {"Authorization": "Bearer " + checked_token(token),
                         "Accept": "application/vnd.github+json",
-                        "X-GitHub-Api-Version": "2022-11-28"}
+                        "X-GitHub-Api-Version": "2022-11-28",
+                        "Cache-Control": "no-cache"}
 
     def __call__(self, method, path, **kwargs):
         if not path.startswith("/") or "://" in path:
             raise SafeFailure("Invalid GitHub API path")
-        try:
-            response = self.session.request(method, self.base + path,
-                headers=self.headers, timeout=(10,30), allow_redirects=False, **kwargs)
-            data = response.json()
-            if not isinstance(data, dict):
-                raise ValueError()
-            return response.status_code, data
-        except Exception:
-            raise SafeFailure("GitHub request failed") from None
+        attempts = 3 if method == "GET" else 1
+        for attempt in range(attempts):
+            try:
+                response = self.session.request(method, self.base + path,
+                    headers=self.headers, timeout=(10,30), allow_redirects=False, **kwargs)
+                status = response.status_code
+                try:
+                    data = response.json()
+                except ValueError:
+                    data = None
+                valid = isinstance(data, dict)
+                if not valid:
+                    data = {}
+                if status == 200 and not valid:
+                    if attempt == attempts - 1:
+                        raise SafeFailure("GitHub request failed: invalid JSON response")
+                elif status not in {408, 429, 500, 502, 503, 504} or attempt == attempts - 1:
+                    return status, data
+            except (requests.Timeout, requests.ConnectionError, TimeoutError):
+                if attempt == attempts - 1:
+                    raise SafeFailure("GitHub request failed: transport timeout or connection") from None
+            except Exception:
+                raise SafeFailure("GitHub request failed: invalid response") from None
+            self.sleep(2 ** attempt)
 
 
 class BlueskyBackend:

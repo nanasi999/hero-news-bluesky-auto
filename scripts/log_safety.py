@@ -14,7 +14,20 @@ def diagnostic(exc):
         return "operation failed: timeout"
     if isinstance(exc, OSError):
         return "operation failed: I/O error"
-    return "operation failed: unexpected error"
+    known = {"KeyError", "ValueError", "TypeError", "AttributeError", "RuntimeError"}
+    kind = type(exc).__name__
+    kind = kind if kind in known else "unclassified"
+    # Fixed module names and numeric line numbers are safe; exception values are not.
+    modules = {"posting_state.py", "github_protocol.py", "live_adapters.py",
+               "production.py", "post_to_threads.py", "post_to_bluesky.py"}
+    location = ""
+    tb = exc.__traceback__
+    while tb is not None:
+        filename = os.path.basename(tb.tb_frame.f_code.co_filename)
+        if filename in modules:
+            location = " at " + filename + ":" + str(tb.tb_lineno)
+        tb = tb.tb_next
+    return "operation failed: " + kind + location
 
 
 def checked_token(value):
@@ -47,4 +60,3 @@ def get_json(http, url, params, stage):
     if not isinstance(payload, dict):
         raise SafeFailure(stage + " failed: invalid response")
     return payload
-

@@ -2,12 +2,15 @@
 import base64
 import json
 import re
+import time
 from log_safety import SafeFailure
 
 
 def response(call, method, path, **kwargs):
     try:
         status, data = call(method, path, **kwargs)
+    except SafeFailure:
+        raise
     except Exception:
         raise SafeFailure("GitHub transport failed") from None
     if type(status) is not int or not isinstance(data, dict):
@@ -16,15 +19,28 @@ def response(call, method, path, **kwargs):
 
 
 class GitHubStore:
-    def __init__(self, call, branch, path="test-ledger.json"):
+    def __init__(self, call, branch, path="test-ledger.json", sleep=time.sleep):
         if not (branch.startswith("test/") or branch == "actions-state/social-posting") or path != "test-ledger.json":
             raise SafeFailure("Only test ledger destinations are permitted")
         self.call, self.branch, self.path = call, branch, "/contents/"+path
+        self.sleep = sleep
+        self.obsolete = set()
+        self.seen = set()
 
     def read(self):
+        for attempt in range(3):
+            revision, body = self._read()
+            if revision not in self.obsolete:
+                self.seen.add(revision)
+                return revision, body
+            if attempt < 2:
+                self.sleep(2 ** attempt)
+        raise SafeFailure("Ledger read remained older than confirmed checkpoint")
+
+    def _read(self):
         status, data = response(self.call,"GET",self.path,params={"ref":self.branch})
         if status != 200:
-            raise SafeFailure("Ledger must be provisioned before posting")
+            raise SafeFailure("Ledger read failed: HTTP " + str(status))
         try:
             if data["encoding"] != "base64" or not isinstance(data["sha"],str) or not data["sha"]:
                 raise ValueError()
@@ -40,12 +56,32 @@ class GitHubStore:
             raise SafeFailure("Ledger revision required")
         payload={"message":"Update test ledger","branch":self.branch,"sha":revision,
                  "content":base64.b64encode(json.dumps(body).encode()).decode()}
-        status,data=response(self.call,"PUT",self.path,json=payload)
-        if status == 409:
-            return False
-        if status != 200 or not isinstance(data.get("content"),dict) or not data["content"].get("sha"):
-            raise SafeFailure("Ledger checkpoint not confirmed")
-        return True
+        for attempt in range(3):
+            try:
+                status,data=response(self.call,"PUT",self.path,json=payload)
+            except SafeFailure:
+                status,data=0,{}
+            new_sha = data.get("content", {}).get("sha") if isinstance(data.get("content"), dict) else None
+            if status == 200 and isinstance(new_sha, str) and new_sha:
+                self._confirmed(revision, new_sha)
+                return True
+            if status not in {0, 200, 408, 409, 429, 500, 502, 503, 504}:
+                raise SafeFailure("Ledger checkpoint failed: HTTP " + str(status))
+            # A lost PUT response may already have committed. Never replay against a new SHA.
+            current, actual = self.read()
+            if actual == body:
+                self._confirmed(revision, current)
+                return True
+            if current != revision:
+                return False
+            if attempt < 2:
+                self.sleep(2 ** attempt)
+        raise SafeFailure("Ledger checkpoint not confirmed after bounded retry")
+
+    def _confirmed(self, previous, current):
+        self.obsolete.update(self.seen | {previous})
+        self.obsolete.discard(current)
+        self.seen.add(current)
 
 
 class OwnerStatus:
@@ -61,4 +97,3 @@ class OwnerStatus:
         if state not in {"completed","queued","in_progress","waiting","pending","requested"}:
             raise SafeFailure("Lock owner state unknown")
         return state
-

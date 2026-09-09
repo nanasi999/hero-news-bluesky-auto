@@ -90,6 +90,8 @@ class Coordinator:
 
         def stage(name, **fields):
             def update(data):
+                if key not in data["posts"]:
+                    raise Held("Journal row missing after checkpoint; send withheld")
                 data["posts"][key].update(stage=name, **fields)
                 return copy.deepcopy(data["posts"][key])
             return self.change(update)

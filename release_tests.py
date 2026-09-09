@@ -136,6 +136,174 @@ class ReleaseTests(unittest.TestCase):
         self.assertIn("fixture",self.api.files[".bluesky-posted.json"]["posted"])
         self.assertIn("fixture",self.api.files[".threads-posted.json"]["posted"])
 
+    def test_stale_read_after_intent_does_not_lose_row(self):
+        original=self.api
+        stale=[]
+        def lagging(method,path,**kw):
+            if method=="GET" and path=="/contents/test-ledger.json" and stale:
+                return stale.pop(0)
+            before=original("GET",path) if method=="PUT" else None
+            result=original(method,path,**kw)
+            if method=="PUT" and path=="/contents/test-ledger.json":
+                if any(r["stage"]=="intent" for r in original.files["test-ledger.json"]["posts"].values()):
+                    stale.append(before)
+            return result
+        self.c.store.call=lagging
+        self.c.store.sleep=lambda seconds:None
+        self.assertEqual(self.run_post()[0],0)
+        self.assertEqual(self.run_post()[0],0)
+        self.assertEqual(self.client.com.atproto.repo.create_record.call_count,1)
+        self.assertEqual(sum(url.endswith("/threads_publish") for _,url,_ in self.session.calls),1)
+
+    def test_checkpoint_response_lost_is_reconciled(self):
+        original=self.api
+        lost=[False]
+        def transport(method,path,**kw):
+            result=original(method,path,**kw)
+            if method=="PUT" and path=="/contents/test-ledger.json" and not lost[0]:
+                lost[0]=True
+                raise SafeFailure("GitHub request failed")
+            return result
+        self.c.store.call=transport
+        self.c.store.sleep=lambda seconds:None
+        self.assertEqual(self.run_post()[0],0)
+
+    def test_checkpoint_transient_conflict_same_revision_retries(self):
+        original=self.api
+        conflict=[True]
+        def transport(method,path,**kw):
+            if method=="PUT" and conflict[0]:
+                conflict[0]=False
+                return 409,{}
+            return original(method,path,**kw)
+        self.c.store.call=transport
+        self.c.store.sleep=lambda seconds:None
+        self.assertEqual(self.run_post()[0],0)
+
+    def test_true_checkpoint_conflict_never_overwrites_other_owner(self):
+        self.assertTrue(self.c.acquire())
+        revision,body=self.c.store.read()
+        body["posts"]["fixture"]={"stage":"intent"}
+        self.api.files["test-ledger.json"]["lock"]="run:2:attempt:1"
+        self.api.rev["test-ledger.json"]+=1
+        self.assertFalse(self.c.store.cas(revision,body))
+        self.assertEqual(self.api.files["test-ledger.json"]["lock"],"run:2:attempt:1")
+        self.assertEqual(self.api.files["test-ledger.json"]["posts"],{})
+
+    def test_permanent_stale_read_never_falls_back_to_cached_lock(self):
+        self.c.store.sleep=lambda seconds:None
+        self.assertTrue(self.c.acquire())
+        stale=self.api("GET","/contents/test-ledger.json")
+        self.c.change(lambda body:body["posts"].update({"fixture":{"stage":"intent"}}))
+        transport=Mock(return_value=stale)
+        self.c.store.call=transport
+        with self.assertRaises(SafeFailure):self.c.before_send()
+        self.assertEqual(transport.call_count,3)
+        self.client.com.atproto.repo.create_record.assert_not_called()
+        self.assertEqual(self.session.calls,[])
+
+    def test_stale_prepared_and_publishing_reads_do_not_repeat_send(self):
+        original=self.api
+        stale=[]
+        def lagging(method,path,**kw):
+            if method=="GET" and path=="/contents/test-ledger.json" and stale:
+                return stale.pop(0)
+            before=original("GET",path) if method=="PUT" else None
+            result=original(method,path,**kw)
+            if method=="PUT" and path=="/contents/test-ledger.json":
+                if any(r["stage"] in {"prepared","publishing","confirmed"} for r in original.files["test-ledger.json"]["posts"].values()):
+                    stale.append(before)
+            return result
+        self.c.store.call=lagging
+        self.c.store.sleep=lambda seconds:None
+        self.assertEqual(self.run_post()[0],0)
+        self.assertEqual(self.run_post()[0],0)
+        self.assertEqual(sum(url.endswith("/threads") for _,url,_ in self.session.calls),1)
+        self.assertEqual(sum(url.endswith("/threads_publish") for _,url,_ in self.session.calls),1)
+
+    def test_checkpoint_conflict_retry_is_bounded(self):
+        self.c.store.sleep=lambda seconds:None
+        original=self.api
+        writes=[]
+        def conflict(method,path,**kw):
+            if method=="PUT":
+                writes.append(kw)
+                return 409,{}
+            return original(method,path,**kw)
+        self.c.store.call=conflict
+        self.assertEqual(self.run_post()[0],1)
+        self.assertEqual(len(writes),3)
+        self.assertEqual(self.session.calls,[])
+
+    def test_github_get_transient_timeout_and_html_error_recover(self):
+        session=Mock()
+        bad=types.SimpleNamespace(status_code=502,json=Mock(side_effect=ValueError("FAKE_PRIVATE")))
+        good=types.SimpleNamespace(status_code=200,json=lambda:{"ok":True})
+        session.request.side_effect=[adapters.requests.Timeout("FAKE_PRIVATE"),bad,good]
+        sleeps=[]
+        http=adapters.GitHubHTTP("fixture/repo","FAKE_TOKEN",session,sleeps.append)
+        self.assertEqual(http("GET","/contents/test-ledger.json"),(200,{"ok":True}))
+        self.assertEqual(sleeps,[1,2])
+
+    def test_github_get_auth_failure_is_not_retried(self):
+        for status in [401,403,404]:
+            session=Mock()
+            session.request.return_value=types.SimpleNamespace(status_code=status,json=lambda:{})
+            http=adapters.GitHubHTTP("fixture/repo","FAKE_TOKEN",session,lambda seconds:self.fail("unexpected retry"))
+            self.assertEqual(http("GET","/contents/test-ledger.json")[0],status)
+            self.assertEqual(session.request.call_count,1)
+
+    def test_github_get_invalid_json_recovers_with_bounded_read_retry(self):
+        session=Mock()
+        session.request.side_effect=[
+            types.SimpleNamespace(status_code=200,json=Mock(side_effect=ValueError("FAKE_PRIVATE"))),
+            types.SimpleNamespace(status_code=200,json=lambda:{"ok":True})]
+        http=adapters.GitHubHTTP("fixture/repo","FAKE_TOKEN",session,lambda seconds:None)
+        self.assertEqual(http("GET","/contents/test-ledger.json"),(200,{"ok":True}))
+        self.assertEqual(session.request.call_count,2)
+
+    def test_github_put_is_not_blindly_retried_by_transport(self):
+        session=Mock()
+        session.request.side_effect=adapters.requests.Timeout("FAKE_PRIVATE")
+        http=adapters.GitHubHTTP("fixture/repo","FAKE_TOKEN",session,lambda seconds:None)
+        with self.assertRaises(SafeFailure) as error:http("PUT","/contents/test-ledger.json")
+        self.assertNotIn("FAKE",str(error.exception))
+        self.assertEqual(session.request.call_count,1)
+
+    def test_github_get_permanent_transport_failure_is_bounded(self):
+        session=Mock()
+        session.request.side_effect=adapters.requests.ConnectionError("FAKE_PRIVATE")
+        http=adapters.GitHubHTTP("fixture/repo","FAKE_TOKEN",session,lambda seconds:None)
+        with self.assertRaises(SafeFailure):http("GET","/contents/test-ledger.json")
+        self.assertEqual(session.request.call_count,3)
+
+    def test_source_transient_failure_retries_without_sns_calls(self):
+        from source_entries import collect
+        parser=Mock(side_effect=ValueError("FAKE_PRIVATE"))
+        homepage=Mock(side_effect=[OSError("FAKE_PRIVATE"),[{"link":"https://example.invalid/article"}]])
+        output=io.StringIO()
+        with contextlib.redirect_stdout(output):
+            rows=collect(parser,homepage,"https://example.invalid/feed",sleep=lambda seconds:None)
+        self.assertEqual(len(rows),1)
+        self.assertEqual(homepage.call_count,2)
+        self.assertNotIn("FAKE",output.getvalue())
+        self.assertEqual(self.session.calls,[])
+
+    def test_source_total_failure_remains_failure_after_three_attempts(self):
+        from source_entries import collect
+        parser=Mock(side_effect=ValueError("FAKE_PRIVATE"))
+        homepage=Mock(side_effect=OSError("FAKE_PRIVATE"))
+        with contextlib.redirect_stdout(io.StringIO()),self.assertRaises(SafeFailure):
+            collect(parser,homepage,"https://example.invalid/feed",sleep=lambda seconds:None)
+        self.assertEqual(parser.call_count,3)
+        self.assertEqual(homepage.call_count,3)
+
+    def test_safe_diagnostic_identifies_class_without_exception_values(self):
+        from log_safety import diagnostic
+        for exc in [KeyError("FAKE_PRIVATE"),ValueError("FAKE_PRIVATE"),Exception("FAKE_PRIVATE")]:
+            self.assertNotIn("FAKE",diagnostic(exc))
+        self.assertIn("KeyError",diagnostic(KeyError("FAKE_PRIVATE")))
+
     def test_bluesky_response_lost_matches_saved_record(self):
         original=self.client.com.atproto.repo.create_record.side_effect
         def lost(data):original(data);raise TimeoutError("FAKE_PRIVATE")
