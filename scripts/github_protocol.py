@@ -18,6 +18,17 @@ def response(call, method, path, **kwargs):
     return status, data
 
 
+def live_tip(call, branch):
+    status, data = response(call, "GET", "/git/ref/heads/" + branch)
+    obj = data.get("object")
+    if (status != 200 or data.get("ref") != "refs/heads/" + branch or
+            not isinstance(obj, dict) or obj.get("type") != "commit" or
+            not isinstance(obj.get("sha"), str) or
+            not re.fullmatch(r"[0-9a-f]{40}", obj["sha"])):
+        raise SafeFailure("Branch tip could not be verified")
+    return obj["sha"]
+
+
 class GitHubStore:
     def __init__(self, call, branch, path="test-ledger.json", sleep=time.sleep):
         if not (branch.startswith("test/") or branch == "actions-state/social-posting") or path != "test-ledger.json":
@@ -30,6 +41,8 @@ class GitHubStore:
     def read(self):
         for attempt in range(3):
             revision, body = self._read()
+            if revision in self.obsolete:
+                revision, body = self._read_tip()
             if revision not in self.obsolete:
                 self.seen.add(revision)
                 return revision, body
@@ -37,8 +50,12 @@ class GitHubStore:
                 self.sleep(2 ** attempt)
         raise SafeFailure("Ledger read remained older than confirmed checkpoint")
 
-    def _read(self):
-        status, data = response(self.call,"GET",self.path,params={"ref":self.branch})
+    def _read_tip(self):
+        # Resolve the live branch independently of the Contents branch-name cache.
+        return self._read(live_tip(self.call, self.branch))
+
+    def _read(self, ref=None):
+        status, data = response(self.call,"GET",self.path,params={"ref":ref or self.branch})
         if status != 200:
             raise SafeFailure("Ledger read failed: HTTP " + str(status))
         try:
