@@ -1,0 +1,104 @@
+name: Recover two empty deployment runs
+on:
+  push:
+    branches: [test/recover-empty-2026-09-13]
+    paths: [.github/workflows/recover-empty-runs.yml]
+permissions: {}
+jobs:
+  recover:
+    if: github.ref == 'refs/heads/test/recover-empty-2026-09-13'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Cancel only verified empty deployment runs
+        env:
+          RECOVERY_TOKEN: ${{ github.token }}
+        shell: python
+        run: |
+          """One-shot cancellation of two verified, empty deployment runs only."""
+          import json
+          import os
+          import time
+          import urllib.error
+          import urllib.request
+          
+          REPO = "nanasi999/hero-news-bluesky-auto"
+          HEAD = "f69a4bef8ef8805127a80039ea269bef63f130f5"
+          TARGETS = {
+              34749490287: ".github/workflows/post-to-bluesky.yml",
+              34749489993: ".github/workflows/verify-auto-post.yml",
+          }
+          
+          
+          def eligible(run, jobs, target):
+              return (target in TARGETS and run.get("id") == target
+                      and run.get("head_sha") == HEAD and run.get("head_branch") == "main"
+                      and run.get("path") == TARGETS[target] and run.get("event") == "push"
+                      and run.get("run_attempt") == 1 and run.get("status") == "queued"
+                      and jobs.get("total_count") == 0 and jobs.get("jobs") == [])
+          
+          
+          def recover(call, sleep=time.sleep):
+              outcomes = {}
+              for target in TARGETS:
+                  path = "/actions/runs/" + str(target)
+                  def inspect():
+                      status, run = call("GET", path)
+                      js, jobs = call("GET", path + "/jobs?filter=all&per_page=100")
+                      if status != 200 or js != 200:
+                          raise RuntimeError("Read unavailable for run " + str(target))
+                      return run, jobs
+                  run, jobs = inspect()
+                  if run.get("status") == "completed":
+                      outcomes[target] = run.get("conclusion")
+                      continue
+                  for operation in ("cancel", "force-cancel"):
+                      if not eligible(run, jobs, target):
+                          raise RuntimeError("Target changed; cancellation refused for " + str(target))
+                      status, _ = call("POST", path + "/" + operation)
+                      print(str(target) + " " + operation + " HTTP " + str(status), flush=True)
+                      if status in (401, 403):
+                          raise RuntimeError("Actions write access denied")
+                      for _ in range(6):
+                          sleep(5)
+                          run, jobs = inspect()
+                          if run.get("status") == "completed":
+                              break
+                      if run.get("status") == "completed":
+                          break
+                  outcomes[target] = run.get("conclusion") if run.get("status") == "completed" else "still-queued"
+              print(json.dumps(outcomes), flush=True)
+              if any(v == "still-queued" for v in outcomes.values()):
+                  raise RuntimeError("GitHub did not terminate all verified targets")
+              return outcomes
+          
+          
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, *args, **kwargs):
+                  return None
+          
+          
+          def main():
+              opener = urllib.request.build_opener(NoRedirect)
+              def call(method, path):
+                  request = urllib.request.Request(
+                      "https://api.github.com/repos/" + REPO + path, method=method,
+                      headers={"Authorization": "Bearer " + os.environ["RECOVERY_TOKEN"],
+                               "Accept": "application/vnd.github+json",
+                               "X-GitHub-Api-Version": "2026-03-10"},
+                      data=b"{}" if method == "POST" else None)
+                  try:
+                      with opener.open(request, timeout=30) as result:
+                          raw = result.read()
+                          return result.status, json.loads(raw) if raw else {}
+                  except urllib.error.HTTPError as exc:
+                      return exc.code, {}
+                  except Exception:
+                      raise RuntimeError("GitHub request failed; details suppressed") from None
+              recover(call)
+          
+          
+          if __name__ == "__main__":
+              main()
