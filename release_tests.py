@@ -387,6 +387,79 @@ class ReleaseTests(unittest.TestCase):
         production.export_state(self.api)
         self.assertEqual(self.api.files[".bluesky-posted.json"],{"posted":["local","remote"],"preserve":"fixture"})
 
+    def export_fixture(self):
+        production.hydrate(self.api)
+        Path(".bluesky-posted.json").write_text(json.dumps({"posted":["local"]}))
+
+    def test_export_lost_response_reads_back_without_second_write(self):
+        for failure in (500, "timeout"):
+            with self.subTest(failure=failure):
+                self.api=API();self.export_fixture();writes=[]
+                def call(method,path,**kw):
+                    result=self.api(method,path,**kw)
+                    if method == "PUT":
+                        writes.append(path)
+                        if failure == "timeout":raise TimeoutError("FAKE_PRIVATE")
+                        return failure,{}
+                    return result
+                production.export_state(call,sleep=lambda _:None)
+                self.assertEqual(len(writes),1)
+                self.assertEqual(self.api.files[".bluesky-posted.json"]["posted"],["local"])
+
+    def test_export_transient_failure_retries_with_remote_merge(self):
+        self.export_fixture();writes=[];waits=[]
+        def call(method,path,**kw):
+            if method == "PUT":
+                writes.append(path)
+                if len(writes) == 1:
+                    self.api.files[".bluesky-posted.json"]["posted"]=["concurrent"]
+                    self.api.rev[".bluesky-posted.json"]+=1
+                    return 503,{}
+            return self.api(method,path,**kw)
+        production.export_state(call,sleep=waits.append)
+        self.assertEqual(len(writes),2);self.assertEqual(waits,[1])
+        self.assertEqual(self.api.files[".bluesky-posted.json"],{"posted":["concurrent","local"],"preserve":"fixture"})
+
+    def test_export_stale_branch_read_recovers_at_pinned_tip(self):
+        self.export_fixture();path="/contents/.bluesky-posted.json"
+        stale=self.api("GET",path)
+        self.api.files[".bluesky-posted.json"]["posted"]=["concurrent"]
+        self.api.rev[".bluesky-posted.json"]+=1
+        writes=[]
+        def call(method,url,**kw):
+            if method == "GET" and url == path and kw["params"]["ref"] == "main":return stale
+            if method == "PUT":writes.append(url)
+            return self.api(method,url,**kw)
+        production.export_state(call,sleep=lambda _:None)
+        self.assertEqual(len(writes),2)
+        self.assertEqual(self.api.files[".bluesky-posted.json"]["posted"],["concurrent","local"])
+
+    def test_export_auth_failure_never_retries(self):
+        for status in (401,403):
+            self.export_fixture();writes=[]
+            def call(method,path,**kw):
+                if method == "PUT":writes.append(path);return status,{}
+                return self.api(method,path,**kw)
+            with self.assertRaises(SafeFailure):production.export_state(call,sleep=lambda _:self.fail("retry"))
+            self.assertEqual(len(writes),1)
+
+    def test_export_persistent_failure_is_bounded(self):
+        self.export_fixture();writes=[];waits=[]
+        def call(method,path,**kw):
+            if method == "PUT":writes.append(path);return 500,{}
+            return self.api(method,path,**kw)
+        with self.assertRaises(SafeFailure):production.export_state(call,sleep=waits.append)
+        self.assertEqual(len(writes),3);self.assertEqual(waits,[1,2])
+
+    def test_export_unverifiable_tip_does_not_replay_write(self):
+        self.export_fixture();writes=[]
+        def call(method,path,**kw):
+            if method == "PUT":writes.append(path);return 500,{}
+            if path.startswith("/git/ref/"):return 200,{"object":{"type":"commit","sha":"a"*40}}
+            return self.api(method,path,**kw)
+        with self.assertRaises(SafeFailure):production.export_state(call,sleep=lambda _:self.fail("retry"))
+        self.assertEqual(len(writes),1)
+
     def test_threads_headers_and_no_secret_query(self):
         self.tb.health();container=self.tb.create_threads({"text":"fixture"})
         self.assertEqual(self.tb.threads_status(container),"FINISHED")

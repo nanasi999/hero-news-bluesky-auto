@@ -18,6 +18,17 @@ def response(call, method, path, **kwargs):
     return status, data
 
 
+def live_tip(call, branch):
+    status, data = response(call, "GET", "/git/ref/heads/" + branch)
+    obj = data.get("object")
+    if (status != 200 or data.get("ref") != "refs/heads/" + branch or
+            not isinstance(obj, dict) or obj.get("type") != "commit" or
+            not isinstance(obj.get("sha"), str) or
+            not re.fullmatch(r"[0-9a-f]{40}", obj["sha"])):
+        raise SafeFailure("Branch tip could not be verified")
+    return obj["sha"]
+
+
 class GitHubStore:
     def __init__(self, call, branch, path="test-ledger.json", sleep=time.sleep):
         if not (branch.startswith("test/") or branch == "actions-state/social-posting") or path != "test-ledger.json":
@@ -41,14 +52,7 @@ class GitHubStore:
 
     def _read_tip(self):
         # Resolve the live branch independently of the Contents branch-name cache.
-        status, data = response(self.call, "GET", "/git/ref/heads/" + self.branch)
-        obj = data.get("object")
-        if (status != 200 or data.get("ref") != "refs/heads/" + self.branch or
-                not isinstance(obj, dict) or obj.get("type") != "commit" or
-                not isinstance(obj.get("sha"), str) or
-                not re.fullmatch(r"[0-9a-f]{40}", obj["sha"])):
-            raise SafeFailure("Ledger branch tip could not be verified")
-        return self._read(obj["sha"])
+        return self._read(live_tip(self.call, self.branch))
 
     def _read(self, ref=None):
         status, data = response(self.call,"GET",self.path,params={"ref":ref or self.branch})

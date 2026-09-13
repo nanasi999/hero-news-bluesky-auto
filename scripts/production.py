@@ -10,7 +10,7 @@ import post_to_bluesky as blue
 import post_to_threads as threads
 import threads_token_store as tokens
 import workflow_runner
-from github_protocol import GitHubStore, OwnerStatus, response
+from github_protocol import GitHubStore, OwnerStatus, response, live_tip
 from live_adapters import GitHubHTTP, BlueskyBackend, ThreadsBackend
 from log_safety import SafeFailure, diagnostic
 from posting_state import Coordinator
@@ -48,8 +48,8 @@ def proven_nonposting(http, run):
     return status == 200 and jobs.get("total_count") == 0 and jobs.get("jobs") == []
 
 
-def read_state(http, path):
-    status,data=response(http,"GET","/contents/"+path,params={"ref":"main"})
+def read_state(http, path, ref="main"):
+    status,data=response(http,"GET","/contents/"+path,params={"ref":ref})
     if status != 200:
         raise SafeFailure("Existing posted state unavailable; initialization refused")
     try:
@@ -67,24 +67,34 @@ def hydrate(http):
         Path(path).write_text(json.dumps(value,ensure_ascii=False),encoding="utf-8")
 
 
-def export_state(http):
+def export_state(http, sleep=time.sleep):
     for path in STATES.values():
         local=json.loads(Path(path).read_text(encoding="utf-8"))
         for attempt in range(3):
-            sha,remote=read_state(http,path)
+            sha,remote=read_state(http,path,"main" if attempt == 0 else live_tip(http,"main"))
             combined=sorted(set(remote["posted"]).union(local["posted"]))
             if combined == sorted(set(remote["posted"])):
                 break
             remote["posted"]=combined
             if "updated_at" in local:
                 remote["updated_at"]=local["updated_at"]
-            status,_=response(http,"PUT","/contents/"+path,json={
-                "branch":"main","sha":sha,"message":"Update confirmed social posting state",
-                "content":base64.b64encode(json.dumps(remote,ensure_ascii=False).encode()).decode()})
+            try:
+                status,_=response(http,"PUT","/contents/"+path,json={
+                    "branch":"main","sha":sha,"message":"Update confirmed social posting state",
+                    "content":base64.b64encode(json.dumps(remote,ensure_ascii=False).encode()).decode()})
+            except SafeFailure:
+                status=0
             if status == 200:
                 break
-            if status != 409 or attempt == 2:
-                raise SafeFailure("Posted state export not confirmed")
+            if status not in {0,408,409,429,500,502,503,504}:
+                raise SafeFailure("Posted state export rejected: HTTP " + str(status))
+            # A failed response can follow a committed write. Reconcile before retrying.
+            _,actual=read_state(http,path,live_tip(http,"main"))
+            if set(local["posted"]).issubset(actual["posted"]):
+                break
+            if attempt == 2:
+                raise SafeFailure("Posted state export not confirmed: HTTP " + str(status))
+            sleep(2 ** attempt)
 
 
 def legacy_active(http, current_run):
