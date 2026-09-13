@@ -52,6 +52,9 @@ class API:
         self.fail_export=False
         self.running=[]
     def __call__(self,method,path,**kw):
+        if path.startswith("/git/ref/heads/"):
+            return 200,{"ref":"refs/heads/"+path.removeprefix("/git/ref/heads/"),
+                        "object":{"type":"commit","sha":"a"*40}}
         if path=="/actions/runs":
             return 200,{"total_count":len(self.running),"workflow_runs":self.running}
         if path=="/contents/scripts/production.py":
@@ -195,10 +198,11 @@ class ReleaseTests(unittest.TestCase):
         self.assertTrue(self.c.acquire())
         stale=self.api("GET","/contents/test-ledger.json")
         self.c.change(lambda body:body["posts"].update({"fixture":{"stage":"intent"}}))
-        transport=Mock(return_value=stale)
+        original=self.api
+        transport=Mock(side_effect=lambda method,path,**kw:original(method,path,**kw) if path.startswith("/git/ref/") else stale)
         self.c.store.call=transport
         with self.assertRaises(SafeFailure):self.c.before_send()
-        self.assertEqual(transport.call_count,3)
+        self.assertEqual(transport.call_count,9)
         self.client.com.atproto.repo.create_record.assert_not_called()
         self.assertEqual(self.session.calls,[])
 
@@ -220,6 +224,47 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(self.run_post()[0],0)
         self.assertEqual(sum(url.endswith("/threads") for _,url,_ in self.session.calls),1)
         self.assertEqual(sum(url.endswith("/threads_publish") for _,url,_ in self.session.calls),1)
+
+    def test_persistent_branch_cache_lag_releases_using_live_tip(self):
+        self.c.store.sleep=lambda seconds:None
+        self.assertTrue(self.c.acquire())
+        stale=self.api("GET","/contents/test-ledger.json")
+        self.c.change(lambda body:body["posts"].update({"fixture":{"stage":"confirmed"}}))
+        original=self.api
+        calls=[]
+        def lagging(method,path,**kw):
+            calls.append((method,path,kw))
+            if method=="GET" and path=="/contents/test-ledger.json" and kw.get("params",{}).get("ref")==production.LEDGER_BRANCH:
+                return stale
+            return original(method,path,**kw)
+        self.c.store.call=lagging
+        self.c.release()
+        self.assertIsNone(self.api.files["test-ledger.json"]["lock"])
+        self.assertEqual(self.api.files["test-ledger.json"]["posts"]["fixture"]["stage"],"confirmed")
+        self.assertTrue(any(kw.get("params",{}).get("ref")=="a"*40 for _,_,kw in calls))
+        self.assertEqual(self.session.calls,[])
+
+    def test_pinned_tip_with_other_owner_never_authorizes_send(self):
+        self.assertTrue(self.c.acquire())
+        stale=self.api("GET","/contents/test-ledger.json")
+        self.c.change(lambda body:body.update(marker=True))
+        original=self.api
+        self.api.files["test-ledger.json"]["lock"]="run:2:attempt:1"
+        self.api.rev["test-ledger.json"]+=1
+        def lagging(method,path,**kw):
+            if path=="/contents/test-ledger.json" and kw.get("params",{}).get("ref")==production.LEDGER_BRANCH:
+                return stale
+            return original(method,path,**kw)
+        self.c.store.call=lagging
+        with self.assertRaises(Held):self.c.before_send()
+        self.assertEqual(self.api.files["test-ledger.json"]["lock"],"run:2:attempt:1")
+
+    def test_pinned_tip_failure_does_not_use_cached_ownership(self):
+        for data in [{},{"ref":"refs/heads/wrong","object":{"type":"commit","sha":"a"*40}},
+                     {"ref":"refs/heads/"+production.LEDGER_BRANCH,"object":{"type":"blob","sha":"a"*40}}]:
+            self.c.store.call=Mock(return_value=(200,data))
+            with self.assertRaises(SafeFailure):self.c.store._read_tip()
+            self.assertEqual(self.c.store.call.call_count,1)
 
     def test_checkpoint_conflict_retry_is_bounded(self):
         self.c.store.sleep=lambda seconds:None
