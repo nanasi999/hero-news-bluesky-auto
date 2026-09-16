@@ -9,13 +9,15 @@ const cases=[
 ];
 for(const [title,name] of cases){
   const result=await request(title);
-  assert.equal(result.ok,true);
+  assert.equal(result.ok,true,JSON.stringify(result));
   assert.ok(result.title.includes(name),result.title);
+  console.log(JSON.stringify({title,english:result.title}));
   const url='https://hero-news.com/archives/1789381677.html';
   const message=await translateMessage(title+'\n#Tokusatsu\n'+url,request);
   assert.ok(message.endsWith('\n#Tokusatsu\n'+url));
-  assert.equal((await request(title)).cached,true);
-  console.log(JSON.stringify({title,english:result.title,cacheVerified:true}));
+  const cached=await request(title);
+  assert.equal(cached.cached,true,JSON.stringify(cached));
+  console.log('Cached title and final message verified.');
 }
 assert.equal((await request('')).ok,false);
 assert.equal((await request('a'.repeat(501))).ok,false);

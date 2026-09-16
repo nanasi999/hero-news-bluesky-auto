@@ -10,13 +10,22 @@ export async function translateMessage(message, request) {
   return [english, ...lines].join('\n');
 }
 
-export function appsScriptTranslator(endpoint, fetcher = fetch) {
+export function appsScriptTranslator(endpoint, fetcher = fetch, pause = ms => new Promise(resolve => setTimeout(resolve, ms))) {
   if (!/^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec$/.test(endpoint)) throw Error('Invalid translation endpoint');
   return async title => {
-    try {
-      const response = await fetcher(endpoint, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({title}), signal:AbortSignal.timeout(30000)});
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+      const response = await fetcher(endpoint, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({title}), signal:AbortSignal.timeout(60000)});
       if (!response.ok) throw Error();
-      return await response.json();
-    } catch { throw Error('Translation service unavailable; publication withheld'); }
+      const result = await response.json();
+      if (attempt === 0 && ['busy','translation_unavailable'].includes(result?.error)) {
+        await pause(2000); continue;
+      }
+      return result;
+      } catch {
+        if (attempt === 0) { await pause(2000); continue; }
+        throw Error('Translation service unavailable; publication withheld');
+      }
+    }
   };
 }
