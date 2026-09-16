@@ -1,0 +1,33 @@
+name: Relay existing social articles to Telegram
+on:
+  push:
+    branches: [main]
+    paths: ["telegram/**", ".github/workflows/telegram-relay.yml"]
+  workflow_run:
+    workflows: ["Post blog articles to Bluesky and Threads"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: telegram-heronewscom
+  cancel-in-progress: false
+jobs:
+  relay:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --test telegram/relay.test.mjs
+      - run: node telegram/relay.mjs
+        env:
+          GH_STATE_TOKEN: ${{ github.token }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
