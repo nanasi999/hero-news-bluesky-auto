@@ -36,3 +36,4 @@ jobs:
         env:
           GH_STATE_TOKEN: ${{ github.token }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TITLE_TRANSLATION_URL: https://script.google.com/macros/s/AKfycbyNgH4wWrnOUkepsLvhBQDDmHypYF9l0CRm1vf1KBgQ_icL7lXZc7dfV7VPFNhzbCZS/exec

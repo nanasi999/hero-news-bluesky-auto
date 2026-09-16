@@ -3,7 +3,7 @@ import {appsScriptTranslator, translateMessage} from './translate-message.mjs';
 const request=appsScriptTranslator(process.env.TITLE_TRANSLATION_URL);
 const cases=[
   ['ウルトラマンテオって戦い方が多彩で見てて面白いよね','Ultraman'],
-  ['【仮面ライダーギーツ】レーザーブーストとブーストフォームマーク２、どっちが好き？','Kamen Rider'],
+  ['【仮面ライダーギーツ】レーザーブーストとブーストフォームマーク２、どっちが好き？','Kamen Rider Geats'],
   ['スパイダーマン→蜘蛛に噛まれた、バットマン→…？','Batman'],
   ['スーパー戦隊','Super Sentai'],
 ];

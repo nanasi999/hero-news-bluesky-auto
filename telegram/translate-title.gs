@@ -12,14 +12,14 @@ function doPost(e) {
     if (typeof title !== 'string' || !title.trim() || title.length > 500 || /[\r\n]/.test(title)) return json_({ok:false,error:'invalid_title'});
     if (!lock.tryLock(10000)) return json_({ok:false,error:'busy'});
     var props=PropertiesService.getScriptProperties();
-    var key='t_'+Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256,title));
+    var key='t_v3_'+Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256,title));
     var cached=props.getProperty(key);
     if (cached) return json_({ok:true,title:JSON.parse(cached).text,cached:true});
     var now=Date.now(), quota=JSON.parse(props.getProperty('quota') || '{"since":0,"count":0}');
     if (now-quota.since >= 86400000) quota={since:now,count:0};
     if (quota.count >= 100) return json_({ok:false,error:'daily_limit'});
     quota.count++;props.setProperty('quota',JSON.stringify(quota));
-    var names=[['ウルトラセブン','Ultraseven'],['ウルトラマン','Ultraman'],['仮面ライダー','Kamen Rider'],['スーパー戦隊','Super Sentai'],['ゴジラ','Godzilla'],['ガメラ','Gamera'],['スパイダーマン','Spider-Man'],['アイアンマン','Iron Man'],['バットマン','Batman'],['スーパーマン','Superman'],['マーベル','Marvel']];
+    var names=[['仮面ライダーギーツ','Kamen Rider Geats'],['ウルトラセブン','Ultraseven'],['ウルトラマン','Ultraman'],['仮面ライダー','Kamen Rider'],['スーパー戦隊','Super Sentai'],['ゴジラ','Godzilla'],['ガメラ','Gamera'],['スパイダーマン','Spider-Man'],['アイアンマン','Iron Man'],['バットマン','Batman'],['スーパーマン','Superman'],['マーベル','Marvel']];
     var protectedNames=[];
     var prepared=title;
     names.forEach(function(pair){ if(prepared.indexOf(pair[0])>=0) {var marker='ZXQNAME'+protectedNames.length+'QXZ';prepared=prepared.split(pair[0]).join(marker);protectedNames.push([marker,pair[1]]);} });

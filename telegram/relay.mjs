@@ -1,3 +1,4 @@
+import {translateMessage, appsScriptTranslator} from './translate-message.mjs';
 import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 
@@ -37,7 +38,7 @@ export function articles(ledger) {
   return [...found.values()];
 }
 
-export async function relay({source, read, save, send, pause = async () => {}}) {
+export async function relay({source, read, save, send, pause = async () => {}, translate = async text => text}) {
   const entries = articles(source);
   let {state, sha} = await read();
   if (state === null) {
@@ -52,9 +53,10 @@ export async function relay({source, read, save, send, pause = async () => {}}) 
   for (const entry of [welcome, ...entries]) {
     if (state.posts[entry.key]) continue;
     if (sent >= 20) break;
+    const translatedText = await translate(entry.text);
     state.posts[entry.key] = {status: 'sending'};
     sha = await save(sha, state); // Durable reservation BEFORE any publication.
-    const id = await send(entry.text); // Never retry an ambiguous publication.
+    const id = await send(translatedText); // Never retry an ambiguous publication.
     state.posts[entry.key] = {status: 'confirmed', message_id: id};
     sha = await save(sha, state);
     sent++;
@@ -101,7 +103,9 @@ async function main() {
   if (member.status !== 'administrator' || member.can_post_messages !== true) throw Error('Bot needs posting permission');
   const ledger = await readFile('test-ledger.json');
   if (!ledger) throw Error('Source ledger missing');
+  const translator = appsScriptTranslator(process.env.TITLE_TRANSLATION_URL || '');
   const count = await relay({source: ledger.state,
+    translate: text => translateMessage(text, translator),
     read: async () => await readFile(statePath) || {sha: null, state: null},
     save: async (sha, state) => {
       const saved = await github('/contents/' + statePath, 'PUT', {branch, ...(sha ? {sha} : {}), message: 'Persist Telegram delivery state', content: Buffer.from(JSON.stringify(state)).toString('base64')});
@@ -120,3 +124,4 @@ async function main() {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch(error => { console.error(error.message.replace(/\d{6,}:[A-Za-z0-9_-]+/g, '[REDACTED]')); process.exitCode = 1; });
 }
+

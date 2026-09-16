@@ -1,9 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-import {relay, articles} from './relay.mjs';
+import {relay, articles, articleTags} from './relay.mjs';
 const row = (id, platform = 'threads') => ({stage:'confirmed',platform,identifiers:['https://hero-news.com/archives/' + id],payload:{text:'記事' + id + '\nhttps://hero-news.com/archives/' + id}});
 const source = (...rows) => ({posts:Object.fromEntries(rows.map((r,i)=>[i,r]))});
+test('American comics and unmatched titles retain no tokusatsu tags',()=>{
+  for(const title of ['スパイダーマンの新作','マーベル','DC バットマン','普通の記事'])assert.deepEqual(articleTags(title),[]);
+});
+test('Japanese franchise matches preserve conditional English tags',()=>{
+  for(const [title,tag] of [['仮面ライダー','#KamenRider'],['スーパー戦隊','#SuperSentai'],['ウルトラマン','#Ultraman'],['ゴジラ','#Godzilla'],['ガメラ','#Gamera']])assert.deepEqual(articleTags(title),['#Tokusatsu',tag]);
+});
 function harness(initial = null) {
   let state = initial, revision = 0;
   const messages = [];
@@ -15,6 +21,16 @@ test('first activation skips history; next run forwards once',async()=>{
   await relay({...h,source:source(row(1),row(2))}); assert.equal(h.messages.length,2);
 });
 test('both social platforms share one article identity',()=>assert.equal(articles(source(row(1),row(1,'bluesky'))).length,1));
+test('translation failure leaves article retryable and successful retry sends English once',async()=>{
+  const h=harness({version:1,channel:'@heronewscom',posts:{activation:{status:'confirmed',message_id:1}}});
+  const s=source(row(90));
+  await assert.rejects(relay({...h,source:s,translate:async()=>{throw Error('translation down')}}));
+  assert.equal(h.messages.length,0);assert.equal(Object.keys(h.state().posts).length,1);
+  let calls=0;
+  const translate=async text=>{calls++;return text.replace('記事90','English title')};
+  await relay({...h,source:s,translate});await relay({...h,source:s,translate});
+  assert.equal(calls,1);assert.equal(h.messages.length,1);assert.ok(h.messages[0].startsWith('English title\n'));
+});
 test('only confirmed supported articles',()=>assert.equal(articles(source({...row(1),stage:'sending'},{...row(2),identifiers:['https://evil.invalid/a']})).length,0));
 test('ambiguous sends are reserved and never repeated',async()=>{
   const h=harness();await relay({...h,source:source()});
