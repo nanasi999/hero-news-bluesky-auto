@@ -1,5 +1,8 @@
 // Public-title translation only. No Gmail, Drive, blog, or Telegram access.
-function doGet() { return json_({ok:true, service:'hero-news-title-translation', version:1}); }
+function doGet(e) {
+  if (e && e.parameter && typeof e.parameter.title === 'string') return doPost({postData:{contents:JSON.stringify({title:e.parameter.title})}});
+  return json_({ok:true, service:'hero-news-title-translation', version:2});
+}
 function json_(value) { return ContentService.createTextOutput(JSON.stringify(value)).setMimeType(ContentService.MimeType.JSON); }
 function doPost(e) {
   var lock = LockService.getScriptLock();
@@ -26,7 +29,7 @@ function doPost(e) {
     if (!translated || translated.length>1500 || /[\r\n\u3040-\u30ff\u3400-\u9fff]/.test(translated)) return json_({ok:false,error:'translation_validation'});
     var all=props.getProperties();
     var keys=Object.keys(all).filter(function(k){return k.indexOf('t_')===0;});
-    if(keys.length>=200) {keys.sort(function(a,b){return JSON.parse(all[a]).at-JSON.parse(all[b]).at;});keys.slice(0,25).forEach(function(k){props.deleteProperty(k);});}
+    if(keys.length>=100) {keys.sort(function(a,b){return JSON.parse(all[a]).at-JSON.parse(all[b]).at;});keys.slice(0,25).forEach(function(k){props.deleteProperty(k);});}
     props.setProperty(key,JSON.stringify({text:translated,at:now}));
     return json_({ok:true,title:translated,cached:false});
   } catch (_) { return json_({ok:false,error:'translation_unavailable'}); }

@@ -11,7 +11,7 @@ test('failed or malformed translation never published as English',async()=>{
   for(const value of [{ok:false},{ok:true,title:''},{ok:true,title:'日本語'},{ok:true,title:'one\ntwo'},{ok:true,title:'a'.repeat(1501)}]) await assert.rejects(translateMessage('仮面ライダー\nurl',async()=>value));
 });
 test('request contains no token or article body',async()=>{
-  let body;const fn=appsScriptTranslator('https://script.google.com/macros/s/test/exec',async(url,options)=>{body=JSON.parse(options.body);return {ok:true,json:async()=>({ok:true,title:'Test'})}});await fn('題名');assert.deepEqual(body,{title:'題名'});
+  let fields;const fn=appsScriptTranslator('https://script.google.com/macros/s/test/exec',async(url,options)=>{fields=Object.fromEntries(new URL(url).searchParams);assert.equal(options.body,undefined);assert.equal(options.headers,undefined);return {ok:true,json:async()=>({ok:true,title:'Test'})}});await fn('題名');assert.deepEqual(fields,{title:'題名'});
 });
 test('temporary service failures retry without publishing; quota refusal does not retry',async()=>{
   let attempts=0;

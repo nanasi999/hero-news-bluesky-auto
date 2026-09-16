@@ -15,7 +15,8 @@ export function appsScriptTranslator(endpoint, fetcher = fetch, pause = ms => ne
   return async title => {
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-      const response = await fetcher(endpoint, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({title}), signal:AbortSignal.timeout(60000)});
+      const url = new URL(endpoint); url.searchParams.set('title', title);
+      const response = await fetcher(url.href, {method:'GET', signal:AbortSignal.timeout(60000)});
       if (!response.ok) throw Error();
       const result = await response.json();
       if (attempt === 0 && ['busy','translation_unavailable'].includes(result?.error)) {

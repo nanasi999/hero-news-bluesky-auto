@@ -18,4 +18,4 @@ test('100-call ceiling rejects new translation and resets only after 24 hours',(
 });
 test('bad input never calls translation',()=>{const s=service();for(const x of ['',null,123,'a'.repeat(501),'a\nb'])assert.equal(s.post(x).ok,false);assert.equal(s.calls(),0)});
 test('known franchise names survive placeholder restoration',()=>{const s=service();assert.equal(s.post('仮面ライダー').title,'Kamen Rider');assert.equal(s.post('スーパー戦隊').title,'Super Sentai')});
-test('cache remains bounded',()=>{const seed={};for(let i=0;i<200;i++)seed['t_'+i]=JSON.stringify({text:'Title',at:i});const s=service(seed);assert.equal(s.post('仮題').ok,true);assert.equal(Object.keys(s.data).filter(k=>k.startsWith('t_')).length,176)});
+test('cache remains bounded below property storage quota',()=>{const seed={};for(let i=0;i<100;i++)seed['t_'+i]=JSON.stringify({text:'Title',at:i});const s=service(seed);assert.equal(s.post('仮題').ok,true);assert.equal(Object.keys(s.data).filter(k=>k.startsWith('t_')).length,76)});
