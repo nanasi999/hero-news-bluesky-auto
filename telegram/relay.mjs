@@ -6,6 +6,17 @@ const branch = 'actions-state/social-posting';
 const channel = '@heronewscom';
 const statePath = 'telegram-state.json';
 const hash = text => createHash('sha256').update(text).digest('hex');
+
+export function articleTags(title) {
+  const tags = ['#Tokusatsu'];
+  if (/ウルトラマン|ウルトラセブン|\\bUltraman\\b/i.test(title)) tags.push('#Ultraman');
+  if (/仮面ライダー|\\bKamen\\s*Rider\\b/i.test(title)) tags.push('#KamenRider');
+  if (/スーパー戦隊|戦隊|\\bSuper\\s*Sentai\\b/i.test(title)) tags.push('#SuperSentai');
+  if (/ゴジラ|\\bGodzilla\\b/i.test(title)) tags.push('#Godzilla');
+  if (/ガメラ|\\bGamera\\b/i.test(title)) tags.push('#Gamera');
+  return tags.slice(0, 4);
+}
+
 export function articles(ledger) {
   if (!ledger || !ledger.posts || Array.isArray(ledger.posts)) throw Error('Invalid source ledger');
   const found = new Map();
@@ -21,7 +32,7 @@ export function articles(ledger) {
     if (typeof text !== 'string' || !text.trim()) throw Error('Missing article text');
     text = text.replace(/\n読む\s*$/, '').replace(/\nhttps?:\/\/\S+\s*$/, '').trim();
     const key = hash(link);
-    if (!found.has(key) || row.platform === 'threads') found.set(key, {key, text: text.slice(0, 3500) + '\n' + link});
+    if (!found.has(key) || row.platform === 'threads') found.set(key, {key, text: text.slice(0, 3500) + '\n' + articleTags(text).join(' ') + '\n' + link});
   }
   return [...found.values()];
 }
