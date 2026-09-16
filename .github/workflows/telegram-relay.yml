@@ -26,7 +26,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: node --test telegram/relay.test.mjs
+      - run: node --test telegram/relay.test.mjs telegram/translate-message.test.mjs telegram/translate-service.test.mjs
+      - name: Verify live title translation on deployment
+        if: github.event_name == 'push'
+        run: node telegram/verify-translation-live.mjs
+        env:
+          TITLE_TRANSLATION_URL: https://script.google.com/macros/s/AKfycbyNgH4wWrnOUkepsLvhBQDDmHypYF9l0CRm1vf1KBgQ_icL7lXZc7dfV7VPFNhzbCZS/exec
       - run: node telegram/relay.mjs
         env:
           GH_STATE_TOKEN: ${{ github.token }}
