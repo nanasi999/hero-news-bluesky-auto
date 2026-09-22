@@ -7,6 +7,7 @@ import requests
 from atproto import Client, client_utils, models
 from log_safety import SafeFailure, checked_token, register_mask
 from post_to_bluesky import login_with_retry
+from bluesky_text import build_post
 
 
 def bluesky_failure(exc):
@@ -87,12 +88,7 @@ class BlueskyBackend:
 
     def prepare(self, payload):
         self.connect()
-        base = (payload["prefix"] + payload["title"]).strip()
-        suffix = "\n読む"
-        limit = 300 - len(suffix)
-        if len(base) > limit:
-            base = base[:limit-3].rstrip() + "..."
-        text = client_utils.TextBuilder().text(base).text("\n").link("読む",payload["link"])
+        text = build_post(payload["title"], payload["link"], payload["prefix"])
         record = models.AppBskyFeedPost.Record(
             text=text.build_text(), facets=text.build_facets(),
             created_at=datetime.now(timezone.utc).isoformat().replace("+00:00","Z"))

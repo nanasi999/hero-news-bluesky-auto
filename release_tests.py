@@ -128,7 +128,7 @@ class ReleaseTests(unittest.TestCase):
         models.AppBskyFeedPost.Record(**record)
         facet=record["facets"][0]
         raw=record["text"].encode()
-        self.assertEqual(raw[facet["index"]["byteStart"]:facet["index"]["byteEnd"]].decode(),"読む")
+        self.assertEqual(raw[facet["index"]["byteStart"]:facet["index"]["byteEnd"]].decode(),"記事を読む")
         self.assertEqual(facet["features"][0]["uri"],self.payload["link"])
 
     def test_normal_both_and_second_run_no_duplicates(self):
@@ -635,6 +635,43 @@ class ReleaseTests(unittest.TestCase):
     def test_network_is_blocked(self):
         import socket
         with self.assertRaises(PermissionError):socket.socket()
+
+
+class JapaneseTagTests(unittest.TestCase):
+    def test_same_title_conditions(self):
+        from bluesky_text import article_tags
+        for title, tag in [("仮面ライダー", "仮面ライダー"), ("kAmEn RiDeR", "仮面ライダー"), ("戦隊", "スーパー戦隊"), ("Super Sentai", "スーパー戦隊"), ("ウルトラセブン", "ウルトラマン"), ("Ultraman", "ウルトラマン"), ("ゴジラ", "ゴジラ"), ("Godzilla", "ゴジラ"), ("ガメラ", "ガメラ"), ("Gamera", "ガメラ")]:
+            self.assertEqual(article_tags(title), ["特撮", tag])
+        for title in ["ライダー", "スパイダーマン", "Batman", "特撮", "Unknown", "Ultramans"]:
+            self.assertEqual(article_tags(title), [])
+        self.assertEqual(article_tags("新作Ultramanの話"), ["特撮", "ウルトラマン"])
+        self.assertEqual(article_tags("Kamen　Rider"), ["特撮", "仮面ライダー"])
+        self.assertEqual(article_tags("仮面ライダー ウルトラマン 戦隊 ゴジラ ガメラ"), ["特撮", "ウルトラマン", "仮面ライダー", "スーパー戦隊"])
+
+    def test_layout_and_utf8_facets(self):
+        from bluesky_text import build_post
+        title = "【仮面ライダー】この怪人ってなんか怪獣みたいだよね"
+        text = build_post(title, "https://example.invalid/article", "新着記事: ")
+        self.assertEqual(text.build_text(), "新着記事: " + title + "\n#特撮 #仮面ライダー\n\n記事を読む")
+        raw = text.build_text().encode("utf-8")
+        facets = text.build_facets()
+        self.assertEqual(len(facets), 3)
+        for facet, expected in zip(facets, ["#特撮", "#仮面ライダー", "記事を読む"]):
+            self.assertEqual(raw[facet.index.byte_start:facet.index.byte_end].decode(), expected)
+        self.assertEqual(facets[0].features[0].tag, "特撮")
+        self.assertEqual(facets[-1].features[0].uri, "https://example.invalid/article")
+
+    def test_length_and_production_path(self):
+        from bluesky_text import build_post
+        for title in ["Batman", "あ" * 500 + "仮面ライダー", "😀" * 400 + "ゴジラ"]:
+            payload = {"title":title,"link":"https://example.invalid/article","prefix":"新着記事: "}
+            backend = adapters.BlueskyBackend()
+            backend.did = "did:plc:synthetic"
+            record = backend.prepare(payload)
+            self.assertLessEqual(len(record["text"]), 300)
+            self.assertEqual(record["text"], build_post(title, payload["link"], payload["prefix"]).build_text())
+            self.assertEqual(blue.build_post(title,payload["link"]).build_text(), record["text"])
+        self.assertNotIn("#", build_post("Batman", "https://example.invalid/article", "新着記事: ").build_text())
 
 
 if __name__=="__main__":

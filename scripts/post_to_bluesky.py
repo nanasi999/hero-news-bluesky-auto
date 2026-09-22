@@ -12,6 +12,7 @@ from blog_entries import fetch_homepage_entries
 from test_runtime import require_runtime
 from source_entries import collect
 from log_safety import diagnostic
+from bluesky_text import build_post as build_bluesky_post
 
 
 RSS_URL = os.environ.get("BLOG_RSS_URL", "https://example.invalid/feed")
@@ -61,17 +62,7 @@ def get_entry_date(entry):
 
 
 def build_post(title, link):
-    base = f"{POST_PREFIX}{title}".strip()
-    suffix = "\n読む"
-    limit = 300 - len(suffix)
-    if len(base) > limit:
-        base = base[: limit - 3].rstrip() + "..."
-
-    text = client_utils.TextBuilder()
-    text.text(base)
-    text.text("\n")
-    text.link("読む", link)
-    return text
+    return build_bluesky_post(title, link, POST_PREFIX)
 
 
 def is_retryable_login_error(exc):
@@ -167,4 +158,3 @@ def main(runtime=None):
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
