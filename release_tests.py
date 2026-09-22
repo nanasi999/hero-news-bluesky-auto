@@ -632,6 +632,58 @@ class ReleaseTests(unittest.TestCase):
         refresh=(path/"refresh-threads-token.yml").read_text()
         self.assertNotIn("push:",refresh.split("permissions:")[0])
 
+    def tag_record_pair(self):
+        new = self.backend.prepare({**self.payload, "title":"仮面ライダー"})
+        text = adapters.client_utils.TextBuilder().text("新着記事: 仮面ライダー\n").link("読む", self.payload["link"])
+        old = models.AppBskyFeedPost.Record(text=text.build_text(), facets=text.build_facets(), created_at=new["createdAt"]).model_dump(by_alias=True, exclude_none=True)
+        return old, new
+
+    def saved_tag_record(self, payload, stage):
+        import hashlib
+        self.assertTrue(self.c.acquire())
+        key = hashlib.sha256(b"bluesky\nfixture").hexdigest()
+        record_key = self.backend.new_bluesky_key(key, payload)
+        self.api.files["test-ledger.json"]["posts"][key] = {
+            "platform":"bluesky", "identifiers":["fixture"], "payload":copy.deepcopy(payload),
+            "stage":stage, "record_key":record_key}
+        return record_key
+
+    def test_old_intent_keeps_original_text_facets_and_record_key(self):
+        old, new = self.tag_record_pair()
+        record_key = self.saved_tag_record(old, "intent")
+        result = self.c.post("bluesky", ["fixture"], new, self.backend, set())
+        self.assertEqual(result["stage"], "confirmed")
+        self.assertEqual(self.record, old)
+        self.assertEqual(self.record_key, record_key)
+        self.c.post("bluesky", ["fixture"], new, self.backend, set())
+        self.assertEqual(self.client.com.atproto.repo.create_record.call_count, 1)
+
+    def test_old_ambiguous_record_recovers_without_retagging_or_resend(self):
+        old, new = self.tag_record_pair()
+        self.record_key = self.saved_tag_record(old, "sending")
+        self.record = copy.deepcopy(old)
+        result = self.c.post("bluesky", ["fixture"], new, self.backend, set())
+        self.assertEqual(result["stage"], "confirmed")
+        self.assertEqual(result["payload"], old)
+        self.client.com.atproto.repo.create_record.assert_not_called()
+
+    def test_old_ambiguous_record_with_changed_remote_is_not_overwritten(self):
+        old, new = self.tag_record_pair()
+        self.record_key = self.saved_tag_record(old, "sending")
+        self.record = copy.deepcopy(new)
+        with self.assertRaises(Held):
+            self.c.post("bluesky", ["fixture"], new, self.backend, set())
+        self.assertEqual(self.record, new)
+        self.client.com.atproto.repo.create_record.assert_not_called()
+
+    def test_old_confirmed_record_does_not_republish_after_tag_change(self):
+        old, new = self.tag_record_pair()
+        self.saved_tag_record(old, "confirmed")
+        result = self.c.post("bluesky", ["fixture"], new, self.backend, set())
+        self.assertEqual(result["payload"], old)
+        self.client.com.atproto.repo.create_record.assert_not_called()
+        self.client.com.atproto.repo.get_record.assert_not_called()
+
     def test_network_is_blocked(self):
         import socket
         with self.assertRaises(PermissionError):socket.socket()
