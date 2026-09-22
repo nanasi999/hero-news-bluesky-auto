@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {relay, articles, articleTags} from './relay.mjs';
+import './bluesky-format.test.mjs';
 const row = (id, platform = 'threads') => ({stage:'confirmed',platform,identifiers:['https://hero-news.com/archives/' + id],payload:{text:'記事' + id + '\nhttps://hero-news.com/archives/' + id}});
 const source = (...rows) => ({posts:Object.fromEntries(rows.map((r,i)=>[i,r]))});
 test('American comics and unmatched titles retain no tokusatsu tags',()=>{

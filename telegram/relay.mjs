@@ -31,6 +31,8 @@ export function articles(ledger) {
     const link = u.href;
     let text = row.payload?.text;
     if (typeof text !== 'string' || !text.trim()) throw Error('Missing article text');
+    // Remove only the generated Bluesky footer, not article content or Threads text.
+    if (row.platform === 'bluesky') text = text.replace(/(?:\n#特撮(?: #(?:ウルトラマン|仮面ライダー|スーパー戦隊|ゴジラ|ガメラ)){1,3})?\n\n記事を読む\s*$/, '');
     text = text.replace(/\n読む\s*$/, '').replace(/\nhttps?:\/\/\S+\s*$/, '').trim();
     const key = hash(link);
     if (!found.has(key) || row.platform === 'threads') found.set(key, {key, text: [text.slice(0, 3500), articleTags(text).join(' '), link].filter(Boolean).join('\n')});
@@ -124,4 +126,3 @@ async function main() {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch(error => { console.error(error.message.replace(/\d{6,}:[A-Za-z0-9_-]+/g, '[REDACTED]')); process.exitCode = 1; });
 }
-
