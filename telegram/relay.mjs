@@ -35,7 +35,11 @@ export function articles(ledger) {
     if (row.platform === 'bluesky') {
       text = text.replace(/(?:(?:\n#特撮(?: #(?:ウルトラマン|仮面ライダー|スーパー戦隊|ゴジラ|ガメラ)){1,3})?\n\n記事を読む|\n読む|\nhttps?:\/\/\S+)\s*$/, '');
     } else {
-      text = text.replace(/\n読む\s*$/, '').replace(/\nhttps?:\/\/\S+\s*$/, '');
+      const tag = row.payload.topic_tag;
+      const taggedLink = ['仮面ライダー','ウルトラマン','戦隊','ゴジラ','ガメラ'].includes(tag)
+        ? links.find(url => text.endsWith('\n#' + tag + '\n\n' + url)) : undefined;
+      if (taggedLink) text = text.slice(0, -('\n#' + tag + '\n\n' + taggedLink).length);
+      else text = text.replace(/\n読む\s*$/, '').replace(/\nhttps?:\/\/\S+\s*$/, '');
     }
     text = text.trim();
     const key = hash(link);

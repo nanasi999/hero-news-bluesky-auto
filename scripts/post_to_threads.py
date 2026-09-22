@@ -12,6 +12,7 @@ from blog_entries import fetch_homepage_entries
 from test_runtime import require_runtime
 from source_entries import collect
 from log_safety import diagnostic
+from bluesky_text import article_tags
 
 
 RSS_URL = os.environ.get("BLOG_RSS_URL", "https://example.invalid/feed")
@@ -61,9 +62,27 @@ def get_entry_date(entry):
     return datetime.min.replace(tzinfo=timezone.utc)
 
 
+def topic_tag(title):
+    matches = article_tags(title or "")
+    for source, topic in (("仮面ライダー", "仮面ライダー"), ("ウルトラマン", "ウルトラマン"),
+                          ("スーパー戦隊", "戦隊"), ("ゴジラ", "ゴジラ"), ("ガメラ", "ガメラ")):
+        if source in matches:
+            return topic
+    return None
+
+
 def build_post(title, link):
     title = (title or "New article").strip()
     link = link.strip()
+    tag = topic_tag(title)
+    if tag:
+        suffix = f"\n#{tag}\n\n{link}"
+        title_limit = POST_LIMIT - len(suffix)
+        if title_limit < 1:
+            raise ValueError("Threads URL leaves no room for title and tag")
+        if len(title) > title_limit:
+            title = (title[:title_limit - 3].rstrip() + "...") if title_limit > 3 else title[:title_limit]
+        return title + suffix
     text = f"{title}\n{link}".strip()
     if len(text) <= POST_LIMIT:
         return text
@@ -74,6 +93,14 @@ def build_post(title, link):
     if title_limit <= 3:
         return f"{title[:title_limit]}\n{link}"[:POST_LIMIT]
     return f"{title[: title_limit - 3].rstrip()}...\n{link}"
+
+
+def build_payload(title, link):
+    payload = {"text": build_post(title, link)}
+    tag = topic_tag(title)
+    if tag:
+        payload["topic_tag"] = tag
+    return payload
 
 
 def main(runtime=None):
@@ -125,15 +152,15 @@ def main(runtime=None):
     for entry in targets:
         title = entry.get("title", "New article").strip()
         link = entry["link"]
-        text = build_post(title, link)
+        payload = build_payload(title, link)
         entry_id = get_entry_id(entry)
 
         if DRY_RUN:
-            print(f"[DRY_RUN] Would post: {text}")
+            print(f"[DRY_RUN] Would post: {payload['text']}")
             continue
 
         try:
-            runtime.post("threads", get_entry_identifiers(entry), {"text": text}, posted)
+            runtime.post("threads", get_entry_identifiers(entry), payload, posted)
             posted.update(get_entry_identifiers(entry))
             state["posted"] = sorted(posted)
             save_state(state)
@@ -146,4 +173,3 @@ def main(runtime=None):
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

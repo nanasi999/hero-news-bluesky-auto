@@ -688,6 +688,93 @@ class ReleaseTests(unittest.TestCase):
         import socket
         with self.assertRaises(PermissionError):socket.socket()
 
+    def test_threads_single_topic_conditions_and_priority(self):
+        import itertools
+        examples = [("仮面ライダー", "仮面ライダー"), ("Kamen Rider", "仮面ライダー"),
+                    ("ウルトラセブン", "ウルトラマン"), ("Ultraman", "ウルトラマン"),
+                    ("スーパー戦隊", "戦隊"), ("Super Sentai", "戦隊"),
+                    ("Godzilla", "ゴジラ"), ("Gamera", "ガメラ")]
+        for title, expected in examples:
+            self.assertEqual(threads.topic_tag(title), expected)
+        order = ["仮面ライダー", "ウルトラマン", "戦隊", "ゴジラ", "ガメラ"]
+        for size in range(1, 6):
+            for names in itertools.combinations(order, size):
+                self.assertEqual(threads.topic_tag(" ".join(reversed(names))), names[0])
+        for title in ["Batman", "特撮", "ライダー", "Ultramans", "Gameras", ""]:
+            self.assertIsNone(threads.topic_tag(title))
+
+    def test_threads_tag_layout_length_and_unchanged_unmatched_text(self):
+        for tag in ["仮面ライダー", "ウルトラマン", "戦隊", "ゴジラ", "ガメラ"]:
+            for length in [0, 200, 450, 500, 1000]:
+                title = tag + "😀" * length
+                payload = threads.build_payload(title, self.payload["link"])
+                self.assertEqual(payload["topic_tag"], tag)
+                self.assertTrue(payload["text"].endswith("\n#"+tag+"\n\n"+self.payload["link"]))
+                self.assertLessEqual(len(payload["text"]), 500)
+                self.assertEqual(payload["text"].count("#"), 1)
+                self.assertNotIn("#特撮", payload["text"])
+                self.assertNotIn("記事を読む", payload["text"])
+        self.assertEqual(threads.build_payload("Batman", self.payload["link"]), {"text":"Batman\n"+self.payload["link"]})
+        with self.assertRaises(ValueError):
+            threads.build_payload("仮面ライダー", "https://example.invalid/"+"a"*500)
+
+    def test_threads_api_sends_one_topic_and_preserves_legacy_payload(self):
+        for payload in [threads.build_payload("仮面ライダー", self.payload["link"]), {"text":"old article"}]:
+            self.tb.create_threads(payload)
+            method, url, kwargs = self.session.calls[-1]
+            self.assertEqual(method, "POST")
+            self.assertTrue(url.endswith("/threads"))
+            self.assertEqual(kwargs["data"], {"media_type":"TEXT", **payload})
+            self.assertNotIn("auto_publish_text", kwargs["data"])
+            self.assertNotIn("FAKE_TOKEN", url)
+        count = len(self.session.calls)
+        with self.assertRaises(SafeFailure):
+            self.tb.create_threads({"text":"test", "topic_tag":"特撮"})
+        self.assertEqual(len(self.session.calls), count)
+
+    def test_threads_main_uses_tagged_payload_and_posts_once(self):
+        self.assertTrue(self.c.acquire())
+        runtime = production.PostingRuntime(self.c, self.tb)
+        Path(".threads-posted.json").write_text(json.dumps({"posted":[]}))
+        entry = {"id":"fixture", "title":"仮面ライダー", "link":self.payload["link"]}
+        with patch.object(threads, "collect", return_value=[entry]), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(threads.main(runtime), 0)
+            self.assertEqual(threads.main(runtime), 0)
+        creates = [kw["data"] for method,url,kw in self.session.calls if url.endswith("/threads")]
+        self.assertEqual(creates, [{"media_type":"TEXT", **threads.build_payload(entry["title"], entry["link"])}])
+
+    def test_threads_old_intent_is_not_rewritten_to_add_tag(self):
+        self.assertTrue(self.c.acquire())
+        old = {"text":"仮面ライダー\n"+self.payload["link"]}
+        self.api.files["test-ledger.json"]["posts"]["saved"] = {
+            "platform":"threads", "identifiers":["fixture"], "payload":old, "stage":"intent"}
+        result = self.c.post("threads", ["fixture"], threads.build_payload("仮面ライダー", self.payload["link"]), self.tb, set())
+        self.assertEqual(result["payload"], old)
+        creates = [kw["data"] for _,url,kw in self.session.calls if url.endswith("/threads")]
+        self.assertEqual(creates, [{"media_type":"TEXT", **old}])
+
+    def test_threads_prepared_container_not_recreated_for_new_tag(self):
+        self.assertTrue(self.c.acquire())
+        old = {"text":"old article"}
+        self.api.files["test-ledger.json"]["posts"]["saved"] = {
+            "platform":"threads", "identifiers":["fixture"], "payload":old,
+            "stage":"prepared", "container":"456"}
+        result = self.c.post("threads", ["fixture"], threads.build_payload("仮面ライダー", self.payload["link"]), self.tb, set())
+        self.assertEqual(result["payload"], old)
+        self.assertFalse(any(url.endswith("/threads") for _,url,_ in self.session.calls))
+        self.assertEqual(sum(url.endswith("/threads_publish") for _,url,_ in self.session.calls), 1)
+
+    def test_threads_tagged_lost_response_is_not_republished(self):
+        self.assertTrue(self.c.acquire())
+        payload = threads.build_payload("ウルトラマン", self.payload["link"])
+        self.session.lost = True
+        with self.assertRaises(SafeFailure):
+            self.c.post("threads", ["fixture"], payload, self.tb, set())
+        result = self.c.post("threads", ["fixture"], threads.build_payload("ゴジラ", self.payload["link"]), self.tb, set())
+        self.assertEqual(result["stage"], "confirmed")
+        self.assertEqual(result["payload"], payload)
+        self.assertEqual(sum(url.endswith("/threads_publish") for _,url,_ in self.session.calls), 1)
+
 
 class JapaneseTagTests(unittest.TestCase):
     def test_same_title_conditions(self):

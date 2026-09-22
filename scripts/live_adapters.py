@@ -163,8 +163,14 @@ class ThreadsBackend:
             raise SafeFailure("Threads account mismatch")
 
     def create_threads(self, payload):
+        data = {"media_type":"TEXT", "text":payload["text"]}
+        if "topic_tag" in payload:
+            tag = payload["topic_tag"]
+            if tag not in ("仮面ライダー", "ウルトラマン", "戦隊", "ゴジラ", "ガメラ"):
+                raise SafeFailure("Invalid Threads topic tag")
+            data["topic_tag"] = tag
         return self.request("POST",self.user_id+"/threads",
-            data={"media_type":"TEXT","text":payload["text"]}).get("id")
+            data=data).get("id")
 
     def publish_threads(self, container):
         return self.request("POST",self.user_id+"/threads_publish",
