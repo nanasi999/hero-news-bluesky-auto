@@ -1,0 +1,35 @@
+name: Relay confirmed articles to Facebook
+on:
+  push:
+    branches: [main]
+    paths: ['facebook/**', '.github/workflows/facebook-relay.yml']
+  workflow_run:
+    workflows: ['Post blog articles to Bluesky and Threads']
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: facebook-heronews
+  cancel-in-progress: false
+jobs:
+  relay:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Test delivery and recovery without network
+        run: node --test facebook/relay.test.mjs
+      - name: Deliver new articles
+        run: node facebook/relay.mjs
+        env:
+          GH_STATE_TOKEN: ${{ github.token }}
+          FACEBOOK_PAGE_ACCESS_TOKEN: ${{ secrets.FACEBOOK_PAGE_ACCESS_TOKEN }}
