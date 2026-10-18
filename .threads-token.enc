@@ -2,7 +2,7 @@
   "version": 1,
   "kdf": "pbkdf2-sha256",
   "iterations": 600000,
-  "salt": "uNZ-7MnJS8ymNgl5DfpW0w==",
-  "nonce": "g0RgdGVQ_nW6DHT3",
-  "ciphertext": "ebKk9E_ilQ8v1hJ11eVwZX_vPv9b4YmLB1uT1AhwTUEjELVOGjkh26rdmDU7aT6WIqQl643mH0bn7OHvKBKCA3yRPlmWQLU9i5yz4zYDuxojZMFwEAHfqs1OOpv0udmCvqR6zyxP3p3E_7xyqMt55Su7uIrjdz9rCCGGKMAiA3tMfoDP2XdBhcU8J9VNWN6Z3zS7GAh4SvDws1weMXHsVz6l3Ldad8CYrxPiSm_q0fVVO6XLptU3i2W4FJ64NLJyUs8yDX7jNkirShw="
+  "salt": "AF3iKY2rm_vuLvcCx8Sm1Q==",
+  "nonce": "3CV07tBL-0M21Y-w",
+  "ciphertext": "LVK5ViS5fjFQy5hb7qScmNFNpEuV8pMFicnN5t4EmibThSiydPy1R4S-xplZhVIMJwIZIGMri5n0xmXadrbjYhzRGvuOJ4XTIMf9quwU3T344bl8t2rpTRvshVtxqR-ixSw0DrGlRemZcyqqbeCN2DUmo0oyVYs1dPG7R19f8SErsUaKbgzastl9ngOD__SjjC0Qk_BfXk5wE0yqwOcPDBQ1Zf1P9bFlkO1F0lOdFHEzQq1aa6V036NYIjjgTed8y1KRBau61-1630VA"
 }
