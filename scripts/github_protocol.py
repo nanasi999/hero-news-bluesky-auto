@@ -59,12 +59,29 @@ class GitHubStore:
         if status != 200:
             raise SafeFailure("Ledger read failed: HTTP " + str(status))
         try:
-            if data["encoding"] != "base64" or not isinstance(data["sha"],str) or not data["sha"]:
+            revision = data["sha"]
+            if not isinstance(revision, str) or not revision:
                 raise ValueError()
-            body=json.loads(base64.b64decode(data["content"]))
+            content = data
+            # Contents omits the payload above 1 MiB. Fetch the exact blob
+            # named by that response so CAS still uses the same revision.
+            if data["encoding"] == "none" and data.get("content") == "":
+                if not re.fullmatch(r"[0-9a-f]{40}", revision):
+                    raise ValueError()
+                blob_status, content = response(self.call, "GET", "/git/blobs/" + revision)
+                if blob_status != 200 or content.get("sha") != revision:
+                    raise ValueError()
+            if content["encoding"] != "base64":
+                raise ValueError()
+            raw = base64.b64decode("".join(content["content"].splitlines()), validate=True)
+            if content is not data and (
+                    type(data.get("size")) is not int or
+                    data["size"] != len(raw) or content.get("size") != len(raw)):
+                raise ValueError()
+            body = json.loads(raw)
             if not isinstance(body,dict) or "lock" not in body or not isinstance(body.get("posts"),dict):
                 raise ValueError()
-            return data["sha"],body
+            return revision, body
         except Exception:
             raise SafeFailure("Ledger content invalid") from None
 

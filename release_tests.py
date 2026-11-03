@@ -13,6 +13,7 @@ for key in list(os.environ):
         os.environ.pop(key,None)
 import base64
 import copy
+import hashlib
 import io
 import contextlib
 import json
@@ -84,6 +85,28 @@ class Session:
             data={"id":"789"}
         else:data={"status":"PUBLISHED" if self.published else "FINISHED"}
         return types.SimpleNamespace(ok=True,status_code=200,json=lambda:data)
+
+
+class LargeLedgerTests(unittest.TestCase):
+    def test_large_ledger_retains_cas_revision_and_rejects_wrong_blob(self):
+        ledger = {"lock": "run:123:attempt:1",
+                  "posts": {"entry": {"status": "publishing", "padding": "x" * (1 << 20)}}}
+        raw = json.dumps(ledger).encode()
+        revision = hashlib.sha1(b"blob %d\0" % len(raw) + raw).hexdigest()
+        metadata = {"encoding": "none", "content": "", "sha": revision, "size": len(raw)}
+        blob = {"encoding": "base64", "content": base64.encodebytes(raw).decode(),
+                "sha": revision, "size": len(raw)}
+        api = Mock(side_effect=[(200, metadata), (200, blob),
+                                (200, {"content": {"sha": "b" * 40}})])
+        store = GitHubStore(api, production.LEDGER_BRANCH)
+        self.assertEqual(store.read(), (revision, ledger))
+        self.assertEqual(api.call_args.args, ("GET", "/git/blobs/" + revision))
+        self.assertTrue(store.cas(revision, ledger))
+        self.assertEqual(api.call_args.kwargs["json"]["sha"], revision)
+        for invalid in ({**blob, "sha": "c" * 40}, {**blob, "size": len(raw) - 1}):
+            api.side_effect = [(200, metadata), (200, invalid)]
+            with self.assertRaisesRegex(SafeFailure, "Ledger content invalid"):
+                store.read()
 
 
 class ReleaseTests(unittest.TestCase):
