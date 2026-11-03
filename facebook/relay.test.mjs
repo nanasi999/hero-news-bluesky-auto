@@ -148,6 +148,22 @@ test('readback mismatched body never confirms', async () => {
   const api = graphClient('FAKE', async () => response({id: PAGE + '_1', message: 'other'}));
   await assert.rejects(() => api.verify(PAGE + '_1', {message: 'expected'}), /VERIFY_FAILED/);
 });
+test('GitHub reads large source by immutable blob and rejects a mismatched SHA', async () => {
+  const source = {lock: null, posts: {entry: 'x'.repeat(1 << 20)}};
+  const bytes = Buffer.from(JSON.stringify(source));
+  const sha = 'b'.repeat(40);
+  let blobSha = sha;
+  const store = githubStore('FAKE', async (url, options) => {
+    assert.equal(options.method, 'GET');
+    if (url.includes('/git/ref/')) return response({object: {sha: 'a'.repeat(40)}});
+    if (url.includes('/contents/')) return response({encoding: 'none', content: '', sha, size: bytes.length});
+    assert.ok(url.endsWith('/git/blobs/' + sha));
+    return response({encoding: 'base64', content: bytes.toString('base64'), sha: blobSha, size: bytes.length});
+  });
+  assert.deepEqual(await store.source(), source);
+  blobSha = 'c'.repeat(40);
+  await assert.rejects(() => store.source(), /INVALID_STATE_FILE/);
+});
 test('GitHub checkpoint reconciles a lost accepted PUT without repeating it', async () => {
   let stored = null, writes = 0;
   const store = githubStore('FAKE', async (url, options) => {

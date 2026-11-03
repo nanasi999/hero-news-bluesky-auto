@@ -179,8 +179,18 @@ export function githubStore(token, fetcher = fetch, sleep = pause) {
     if (!/^[a-f0-9]{40}$/.test(ref?.object?.sha || '')) throw new Fault('STATE_BRANCH_UNAVAILABLE');
     const file = await request('/contents/' + path + '?ref=' + ref.object.sha);
     if (!file) return {state: null, sha: null};
-    if (file.encoding !== 'base64' || !/^[a-f0-9]{40}$/.test(file.sha || '')) throw new Fault('INVALID_STATE_FILE');
-    try { return {state: JSON.parse(Buffer.from(file.content, 'base64').toString('utf8')), sha: file.sha}; }
+    if (!/^[a-f0-9]{40}$/.test(file.sha || '')) throw new Fault('INVALID_STATE_FILE');
+    let payload = file;
+    if (file.encoding === 'none' && file.content === '') {
+      payload = await request('/git/blobs/' + file.sha);
+      if (payload?.sha !== file.sha) throw new Fault('INVALID_STATE_FILE');
+    }
+    if (payload.encoding !== 'base64') throw new Fault('INVALID_STATE_FILE');
+    try {
+      const bytes = Buffer.from(payload.content, 'base64');
+      if (payload !== file && (file.size !== bytes.length || payload.size !== bytes.length)) throw new Error();
+      return {state: JSON.parse(bytes.toString('utf8')), sha: file.sha};
+    }
     catch { throw new Fault('INVALID_STATE_FILE'); }
   }
   return {
